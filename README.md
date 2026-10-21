@@ -74,6 +74,7 @@ quantumflow/
 │   ├── test_traffic_model.py
 │   ├── test_solvers.py
 │   ├── test_qubo.py
+│   ├── test_qaoa.py
 │   └── test_api.py
 ├── requirements.txt
 ├── pytest.ini
