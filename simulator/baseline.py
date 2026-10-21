@@ -1,9 +1,17 @@
 """
-QuantumFlow — Fixed-Time Signal Controller
+QuantumFlow — Baseline Signal Controllers
 simulator/baseline.py  ·  Owner: Team Lead
 
-Equal-split baseline: every intersection gets 30 s North-South green and
-30 s East-West green in a 60 s cycle. Independent of queue lengths.
+Simplified teaching / benchmark controllers — NOT a production traffic-light
+controller. There is no yellow or all-red interval, no pedestrian phase,
+no corridor coordination, and no detector smoothing. Green times are a
+one-shot integer split of a fixed 60 s cycle.
+
+Controllers:
+  - Fixed-time: 30 s North-South / 30 s East-West, ignoring queues.
+  - Traffic-responsive: split the cycle in proportion to ns_count / ew_count,
+    then clamp each approach to [MIN_GREEN, MAX_GREEN] (15–45 s) so the
+    cycle still sums to 60 s.
 
 Returns a TimingPlan in the same key format as the supplied TrafficInput
 (named A–D or grid '(r,c)'). Does not mutate simulator state or data shapes.
@@ -99,3 +107,78 @@ class FixedTimeController:
             ew_green=self.ew_green,
             cycle_sec=self.cycle_sec,
         )
+
+
+def _allocate_responsive_greens(
+    ns_count: int,
+    ew_count: int,
+    cycle_sec: int = CYCLE_SEC,
+) -> tuple[int, int]:
+    """
+    Map approach counts to an integer (ns_green, ew_green) pair.
+
+    Rules:
+      - Zero vehicles on both approaches → equal 30 / 30 split.
+      - Equal non-zero counts → equal 30 / 30 split.
+      - Otherwise ns_green ≈ round(ns_share * cycle), clamped to [15, 45];
+        ew_green is derived as cycle_sec − ns_green (also clamped).
+      - Extreme imbalance (all demand on one approach) saturates at 45 / 15.
+    """
+    total = ns_count + ew_count
+    if total == 0 or ns_count == ew_count:
+        ns_green = cycle_sec // 2
+    else:
+        raw_ns = round((ns_count / total) * cycle_sec)
+        ns_green = max(MIN_GREEN, min(MAX_GREEN, raw_ns))
+
+    ew_green = cycle_sec - ns_green
+    ew_green = max(MIN_GREEN, min(MAX_GREEN, ew_green))
+    ns_green = cycle_sec - ew_green
+    return ns_green, ew_green
+
+
+def traffic_responsive_plan(
+    traffic_input: TrafficInput,
+    cycle_sec: int = CYCLE_SEC,
+) -> TimingPlan:
+    """
+    Build a demand-proportional TimingPlan for every intersection.
+
+    This is a simplified queue-ratio split, not a production actuated or
+    adaptive traffic-light controller.
+
+    Args:
+        traffic_input: TrafficInput — same schema as the simulator (unchanged).
+        cycle_sec:     Cycle length in seconds (default 60).
+
+    Returns:
+        TimingPlan with one ApproachTiming per intersection. Each entry
+        satisfies MIN_GREEN ≤ green ≤ MAX_GREEN and ns + ew == cycle_sec.
+
+    Raises:
+        ValueError: if traffic_input is invalid.
+    """
+    validate_traffic_input(traffic_input)
+
+    timing_plan: TimingPlan = {}
+    for iid, counts in traffic_input.items():
+        ns_green, ew_green = _allocate_responsive_greens(
+            counts["ns_count"],
+            counts["ew_count"],
+            cycle_sec,
+        )
+        timing_plan[iid] = ApproachTiming(ns_green=ns_green, ew_green=ew_green)
+
+    validate_timing_plan(timing_plan, traffic_input)
+    return timing_plan
+
+
+class TrafficResponsiveController:
+    """Simplified demand-proportional controller (not for field deployment)."""
+
+    def __init__(self, cycle_sec: int = CYCLE_SEC) -> None:
+        self.cycle_sec = cycle_sec
+
+    def plan(self, traffic_input: TrafficInput) -> TimingPlan:
+        """Return a validated demand-proportional TimingPlan."""
+        return traffic_responsive_plan(traffic_input, cycle_sec=self.cycle_sec)
