@@ -50,6 +50,7 @@ quantumflow/
 │   └── validators.py          ← Cycle & green-time constraint enforcement
 ├── simulator/
 │   ├── traffic_env.py         ← N×N grid simulation
+│   ├── traffic_simulator.py   ← 4-intersection simulator (A, B, C, D)
 │   └── classical_solver.py    ← Greedy baseline
 ├── metrics/
 │   └── evaluator.py           ← ONLY place metrics are computed
@@ -66,6 +67,7 @@ quantumflow/
 ├── tests/
 │   ├── test_validators.py
 │   ├── test_traffic_env.py
+│   ├── test_traffic_simulator.py
 │   ├── test_solvers.py
 │   ├── test_qubo.py
 │   └── test_api.py

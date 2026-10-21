@@ -17,7 +17,8 @@ CYCLE_SEC  = 60
 MIN_GREEN  = 15
 MAX_GREEN  = 45
 
-_KEY_RE = re.compile(r"^\(\d+,\d+\)$")
+_KEY_RE = re.compile(r"^(?:\(\d+,\d+\)|[A-D])$")
+_NAMED_COORDS = {"A": (0, 0), "B": (0, 1), "C": (1, 0), "D": (1, 1)}
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +159,9 @@ def validate_timing_plan(
 # Helper
 # ---------------------------------------------------------------------------
 def _parse_key(key: str) -> tuple[int, int]:
-    """Parse '(row,col)' → (int, int)."""
+    """Parse '(row,col)' or 'A'-'D' → (int, int)."""
+    if key in _NAMED_COORDS:
+        return _NAMED_COORDS[key]
     stripped = key.strip("()")
     r, c = stripped.split(",")
     return int(r), int(c)
