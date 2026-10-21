@@ -1,11 +1,19 @@
 """
-QuantumFlow — Traffic Environment Simulator
-Team Lead (Person A) · Phase 1, Hours 1-2
+QuantumFlow — Traffic Environment Simulator  (G1, G2 resolved)
+simulator/traffic_env.py  ·  Owner: Team Lead
+
+Changelog vs previous version:
+  - compute_congestion() now returns TrafficInput (ns_count / ew_count)
+    instead of Dict[str, float].
+  - run() key renamed from "congestion_map" → "traffic_input".
 """
 
+from __future__ import annotations
+
 import random
-import math
-from typing import Dict, List, Tuple
+from typing import Dict, List
+
+from shared.types import ApproachCounts, TrafficInput
 
 
 class TrafficGrid:
@@ -14,68 +22,89 @@ class TrafficGrid:
     Each cell is an intersection node; edges are road segments.
     """
 
-    def __init__(self, grid_size: int = 4, seed: int = 42):
+    def __init__(self, grid_size: int = 4, seed: int = 42) -> None:
         if grid_size < 2 or grid_size > 10:
             raise ValueError("grid_size must be between 2 and 10.")
         self.grid_size = grid_size
         self.seed = seed
         self.rng = random.Random(seed)
-        # 0 = empty intersection, 1 = occupied
         self.grid: List[List[int]] = [[0] * grid_size for _ in range(grid_size)]
         self.vehicles: List[Dict] = []
-        self.congestion_map: Dict[str, float] = {}
+        self.traffic_input: TrafficInput = {}
 
     # ------------------------------------------------------------------
     # Vehicle management
     # ------------------------------------------------------------------
     def generate_vehicles(self, num_vehicles: int) -> List[Dict]:
-        """Randomly place vehicles on the grid."""
+        """
+        Randomly place vehicles on the grid.
+
+        Returns:
+            List of vehicle dicts:
+            {"id": int, "row": int, "col": int, "direction": "N"|"S"|"E"|"W"}
+        """
+        if num_vehicles < 1:
+            raise ValueError("num_vehicles must be >= 1.")
         self.vehicles = []
         for i in range(num_vehicles):
             row = self.rng.randint(0, self.grid_size - 1)
             col = self.rng.randint(0, self.grid_size - 1)
             direction = self.rng.choice(["N", "S", "E", "W"])
-            self.vehicles.append({"id": i, "row": row, "col": col, "direction": direction})
+            self.vehicles.append(
+                {"id": i, "row": row, "col": col, "direction": direction}
+            )
         return self.vehicles
 
     def step(self, time_steps: int = 1) -> None:
         """Advance simulation by `time_steps` ticks, moving vehicles."""
         for _ in range(time_steps):
             for v in self.vehicles:
-                dr, dc = {"N": (-1, 0), "S": (1, 0), "E": (0, 1), "W": (0, -1)}[v["direction"]]
-                new_r = (v["row"] + dr) % self.grid_size
-                new_c = (v["col"] + dc) % self.grid_size
-                v["row"], v["col"] = new_r, new_c
-                # Randomly change direction with 10% probability
+                dr, dc = {"N": (-1, 0), "S": (1, 0), "E": (0, 1), "W": (0, -1)}[
+                    v["direction"]
+                ]
+                v["row"] = (v["row"] + dr) % self.grid_size
+                v["col"] = (v["col"] + dc) % self.grid_size
+                # 10 % chance to change direction at each tick
                 if self.rng.random() < 0.1:
                     v["direction"] = self.rng.choice(["N", "S", "E", "W"])
 
     # ------------------------------------------------------------------
-    # Congestion calculation
+    # Congestion / TrafficInput  (G1)
     # ------------------------------------------------------------------
-    def compute_congestion(self) -> Dict[str, float]:
+    def compute_congestion(self) -> TrafficInput:
         """
-        Compute congestion score per intersection.
-        Score = vehicles_at_cell / max_capacity (capped at 1.0).
-        Max capacity is a soft constant of 3 vehicles per intersection.
+        Compute per-approach vehicle counts for every intersection.
+
+        N- and S-heading vehicles contribute to ns_count.
+        E- and W-heading vehicles contribute to ew_count.
+
+        Returns:
+            TrafficInput — mapping "(row,col)" → ApproachCounts.
+            All N×N intersections are present (zero-count intersections included).
         """
-        max_capacity = 3
-        counts: Dict[str, int] = {}
+        ns_counts: Dict[str, int] = {}
+        ew_counts: Dict[str, int] = {}
+
         for v in self.vehicles:
             key = f"({v['row']},{v['col']})"
-            counts[key] = counts.get(key, 0) + 1
+            if v["direction"] in ("N", "S"):
+                ns_counts[key] = ns_counts.get(key, 0) + 1
+            else:
+                ew_counts[key] = ew_counts.get(key, 0) + 1
 
-        self.congestion_map = {}
+        self.traffic_input = {}
         for row in range(self.grid_size):
             for col in range(self.grid_size):
                 key = f"({row},{col})"
-                count = counts.get(key, 0)
-                self.congestion_map[key] = min(count / max_capacity, 1.0)
+                self.traffic_input[key] = ApproachCounts(
+                    ns_count=ns_counts.get(key, 0),
+                    ew_count=ew_counts.get(key, 0),
+                )
 
-        return self.congestion_map
+        return self.traffic_input
 
     def get_grid_state(self) -> List[List[int]]:
-        """Return occupancy grid (1 if any vehicle present, else 0)."""
+        """Return binary occupancy grid (1 if any vehicle present, else 0)."""
         state = [[0] * self.grid_size for _ in range(self.grid_size)]
         for v in self.vehicles:
             state[v["row"]][v["col"]] = 1
@@ -83,18 +112,28 @@ class TrafficGrid:
         return state
 
     # ------------------------------------------------------------------
-    # Full simulation run
+    # Full simulation run  (G2)
     # ------------------------------------------------------------------
     def run(self, num_vehicles: int = 20, time_steps: int = 10) -> Dict:
-        """Run a full simulation and return snapshot."""
+        """
+        Run a full simulation and return snapshot.
+
+        Returns:
+            {
+                "grid_size":         int,
+                "grid":              list[list[int]],
+                "vehicle_positions": list[dict],
+                "traffic_input":     TrafficInput,   # ← renamed from congestion_map
+            }
+        """
         self.generate_vehicles(num_vehicles)
         self.step(time_steps)
         grid = self.get_grid_state()
-        congestion = self.compute_congestion()
+        traffic_input = self.compute_congestion()
 
         return {
             "grid_size": self.grid_size,
             "grid": grid,
             "vehicle_positions": self.vehicles,
-            "congestion_map": congestion,
+            "traffic_input": traffic_input,   # G2: was "congestion_map"
         }

@@ -1,100 +1,183 @@
 """
-QuantumFlow — Shared Metrics Evaluator
-Team Lead (Person A) · Phase 1, Hours 3-4
-Both TL and QE import from this module — do not change signatures without team sync.
+QuantumFlow — Shared Metrics Evaluator  (G5 resolved)
+metrics/evaluator.py  ·  Owner: Team Lead
+
+The ONLY place in the codebase where Metrics are calculated.
+All solvers (classical, quantum, mock) must call evaluate() and
+must NOT implement their own metric logic.
+
+Changelog vs previous version:
+  - evaluate() now accepts TrafficInput + TimingPlan (not Dict[str,float]).
+  - Returns SolverResult (complete, typed).
+  - compare() updated to work with SolverResult inputs.
 """
 
+from __future__ import annotations
+
+import math
 from typing import Dict
 
+from shared.types import TrafficInput, TimingPlan, Metrics, SolverResult
+from shared.validators import (
+    validate_traffic_input,
+    validate_timing_plan,
+    CYCLE_SEC,
+    MIN_GREEN,
+    MAX_GREEN,
+)
 
+
+# ---------------------------------------------------------------------------
+# evaluate()
+# ---------------------------------------------------------------------------
 def evaluate(
-    congestion_map: Dict[str, float],
-    signal_timings: Dict[str, int],
-    method: str = "unknown",
-    runtime_ms: float = 0.0,
-) -> Dict:
+    traffic_input: TrafficInput,
+    timing_plan:   TimingPlan,
+    algorithm:     str   = "unknown",
+    runtime_ms:    float = 0.0,
+    cost:          float | None = None,
+) -> SolverResult:
     """
-    Evaluate a signal-timing solution against the congestion map.
+    Compute all Metrics and package into a SolverResult.
+
+    Model:
+        vehicles_served_i  = min(total_i, floor(total_i * green_fraction_i))
+        green_fraction_i   = dominant_green / CYCLE_SEC
+          where dominant_green = ns_green if ns_count >= ew_count else ew_green
+        avg_wait_sec       = mean over intersections of
+                             (1 - green_fraction_i) * CYCLE_SEC * congestion_i
+        total_delay_sec    = sum of per-vehicle delays
 
     Args:
-        congestion_map: dict "(row,col)" → float [0,1]
-        signal_timings: dict "(row,col)" → int green seconds
-        method:         "classical" | "quantum" | "unknown"
-        runtime_ms:     wall-clock solver time in milliseconds
+        traffic_input: TrafficInput — vehicle counts per approach.
+        timing_plan:   TimingPlan  — must satisfy cycle + green-time constraints.
+        algorithm:     Solver name for attribution.
+        runtime_ms:    Wall-clock time of the calling solver (ms).
+        cost:          QUBO/QAOA objective value; None for classical.
 
     Returns:
-        Standardised metrics dict matching the API contract in §4.2.
+        SolverResult with status="ok" and error_msg=None.
+
+    Raises:
+        ValueError: if timing_plan violates constraints or keys mismatch.
     """
-    if not congestion_map:
-        raise ValueError("congestion_map must not be empty.")
-    if set(signal_timings.keys()) != set(congestion_map.keys()):
-        raise ValueError("signal_timings keys must match congestion_map keys.")
+    validate_traffic_input(traffic_input)
+    validate_timing_plan(timing_plan, traffic_input)
 
-    n = len(congestion_map)
-    scores = list(congestion_map.values())
-    greens = list(signal_timings.values())
+    total_vehicles   = 0
+    vehicles_served  = 0
+    total_delay      = 0.0
+    wait_sum         = 0.0
+    n = len(traffic_input)
 
-    avg_congestion = sum(scores) / n
-    avg_green = sum(greens) / n
+    for iid, counts in traffic_input.items():
+        ns_c = counts["ns_count"]
+        ew_c = counts["ew_count"]
+        total_i = ns_c + ew_c
+        total_vehicles += total_i
 
-    # Wait time model: congested roads with short green → high wait
-    total_wait = sum(
-        congestion_map[k] * max(0, 90 - signal_timings[k]) * 0.3
-        for k in congestion_map
-    )
-    avg_wait = total_wait / n if n else 0.0
+        timing = timing_plan[iid]
+        ns_g   = timing["ns_green"]
+        ew_g   = timing["ew_green"]
 
-    # Throughput: fraction of intersections with congestion < 0.5
-    throughput = sum(1 for s in scores if s < 0.5) / n
+        # Effective throughput: dominant approach gets its green, minority waits
+        ns_served = _vehicles_served(ns_c, ns_g)
+        ew_served = _vehicles_served(ew_c, ew_g)
+        served_i  = ns_served + ew_served
+        vehicles_served += served_i
 
-    # Congestion score: weighted average (high-congestion nodes weighted more)
-    congestion_score = sum(s ** 2 for s in scores) / n
+        # Waiting vehicles
+        waiting_i = total_i - served_i
 
-    return {
-        "method": method,
-        "runtime_ms": round(runtime_ms, 1),
-        "total_wait_time": round(total_wait, 2),
-        "metrics": {
-            "throughput": round(throughput, 4),
-            "avg_wait": round(avg_wait, 2),
-            "congestion_score": round(congestion_score, 4),
-        },
+        # Per-intersection average wait (seconds)
+        # Waiting vehicles experience ~(red_time / 2) average wait
+        ns_wait = (ew_g / 2) * (ns_c - ns_served) if ns_c > ns_served else 0.0
+        ew_wait = (ns_g / 2) * (ew_c - ew_served) if ew_c > ew_served else 0.0
+        total_delay += ns_wait + ew_wait
+        wait_sum    += (ns_wait + ew_wait) / max(total_i, 1)
+
+    remaining_queue = total_vehicles - vehicles_served
+    avg_wait_sec    = (total_delay / total_vehicles) if total_vehicles > 0 else 0.0
+
+    metrics: Metrics = {
+        "total_vehicles":  total_vehicles,
+        "vehicles_served": vehicles_served,
+        "remaining_queue": remaining_queue,
+        "avg_wait_sec":    round(avg_wait_sec, 2),
+        "total_delay_sec": round(total_delay, 2),
+        "runtime_ms":      round(runtime_ms, 1),
     }
 
+    result: SolverResult = {
+        "algorithm":   algorithm,
+        "timing_plan": timing_plan,
+        "cost":        round(cost, 4) if cost is not None else None,
+        "metrics":     metrics,
+        "runtime_ms":  round(runtime_ms, 1),
+        "status":      "ok",
+        "error_msg":   None,
+    }
+    return result
 
-def compare(classical_result: Dict, quantum_result: Dict) -> Dict:
+
+# ---------------------------------------------------------------------------
+# compare()
+# ---------------------------------------------------------------------------
+def compare(classical: SolverResult, quantum: SolverResult) -> Dict:
     """
     Return a side-by-side comparison dict for the dashboard.
-    Both inputs must be results from evaluate().
+
+    Args:
+        classical: SolverResult from greedy_optimize().
+        quantum:   SolverResult from run_qaoa() or mock_qaoa_result().
+
+    Returns:
+        {
+            "classical": Metrics,
+            "quantum":   Metrics,
+            "advantage": {
+                "throughput_delta":    float,
+                "wait_reduction_pct":  float,
+                "cost_delta":          float | None,
+            }
+        }
     """
-    def _get(d, *keys):
-        for k in keys:
-            d = d.get(k, {})
-        return d
+    cm = classical["metrics"]
+    qm = quantum["metrics"]
+
+    # Throughput delta: fraction of extra vehicles served by quantum
+    tv = cm["total_vehicles"] or 1  # avoid div/0
+    throughput_delta = round((qm["vehicles_served"] - cm["vehicles_served"]) / tv, 4)
+
+    # Wait reduction %
+    c_wait = cm["avg_wait_sec"] or 1e-9
+    wait_reduction_pct = round((1 - qm["avg_wait_sec"] / c_wait) * 100, 2)
+
+    # Cost delta (None if classical has no cost)
+    cost_delta: float | None = None
+    if quantum["cost"] is not None and classical["cost"] is not None:
+        cost_delta = round(quantum["cost"] - classical["cost"], 4)
 
     return {
-        "classical": {
-            "throughput": _get(classical_result, "metrics", "throughput"),
-            "avg_wait": _get(classical_result, "metrics", "avg_wait"),
-            "congestion_score": _get(classical_result, "metrics", "congestion_score"),
-            "total_wait_time": classical_result.get("total_wait_time"),
-            "runtime_ms": classical_result.get("runtime_ms"),
-        },
-        "quantum": {
-            "throughput": _get(quantum_result, "metrics", "throughput"),
-            "avg_wait": _get(quantum_result, "metrics", "avg_wait"),
-            "congestion_score": _get(quantum_result, "metrics", "congestion_score"),
-            "total_wait_time": quantum_result.get("total_wait_time"),
-            "runtime_ms": quantum_result.get("runtime_ms"),
-        },
+        "classical": dict(cm),
+        "quantum":   dict(qm),
         "advantage": {
-            "throughput_delta": round(
-                _get(quantum_result, "metrics", "throughput") -
-                _get(classical_result, "metrics", "throughput"), 4
-            ),
-            "wait_reduction_pct": round(
-                (1 - _get(quantum_result, "metrics", "avg_wait") /
-                 max(_get(classical_result, "metrics", "avg_wait"), 1e-9)) * 100, 2
-            ),
+            "throughput_delta":   throughput_delta,
+            "wait_reduction_pct": wait_reduction_pct,
+            "cost_delta":         cost_delta,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+def _vehicles_served(queue: int, green_sec: int) -> int:
+    """
+    Estimate vehicles that clear in one green phase.
+    Assumes a discharge rate of 1 vehicle per 2 seconds of green.
+    """
+    if queue == 0:
+        return 0
+    capacity = math.floor(green_sec / 2)   # vehicles / green phase
+    return min(queue, capacity)

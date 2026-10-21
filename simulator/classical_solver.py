@@ -1,69 +1,79 @@
 """
-QuantumFlow — Classical Greedy Signal Optimizer (Baseline)
-Team Lead (Person A) · Phase 1, Hours 2-3
+QuantumFlow — Classical Greedy Signal Optimizer  (G3, G4 resolved)
+simulator/classical_solver.py  ·  Owner: Team Lead
+
+Changelog vs previous version:
+  - Input changed from Dict[str,float] → TrafficInput.
+  - Green-time range changed to [15, 45] with cycle = 60 s.
+  - Private _compute_metrics() REMOVED; now calls metrics.evaluator.evaluate().
+  - Returns SolverResult (typed).
 """
 
+from __future__ import annotations
+
+import time
 from typing import Dict
 
+from shared.types import TrafficInput, TimingPlan, ApproachTiming, SolverResult
+from shared.validators import (
+    validate_traffic_input,
+    CYCLE_SEC,
+    MIN_GREEN,
+    MAX_GREEN,
+)
+from metrics.evaluator import evaluate
 
-def greedy_optimize(congestion_map: Dict[str, float]) -> Dict:
+
+def greedy_optimize(
+    traffic_input: TrafficInput,
+    cycle_sec:     int = CYCLE_SEC,
+) -> SolverResult:
     """
-    Classical greedy baseline: allocate green time proportional
-    to congestion score.  Higher congestion → more green time.
+    Greedy baseline: allocate ns_green proportionally to ns_count / total_count.
+    ew_green = cycle_sec − ns_green, both clamped to [MIN_GREEN, MAX_GREEN].
+
+    When both approaches are empty, defaults to equal split (30 / 30).
 
     Args:
-        congestion_map: dict mapping "(row,col)" → float in [0, 1]
+        traffic_input: TrafficInput — must not be empty; counts must be >= 0.
+        cycle_sec:     Fixed cycle length in seconds (default 60).
 
     Returns:
-        dict with keys: signal_timings, total_wait_time, metrics
+        SolverResult with algorithm="greedy", status="ok".
+
+    Raises:
+        ValueError: if traffic_input is empty or any count is negative.
     """
-    if not congestion_map:
-        raise ValueError("congestion_map must not be empty.")
+    validate_traffic_input(traffic_input)
 
-    min_green = 10   # seconds
-    max_green = 90   # seconds
-    green_range = max_green - min_green
+    t0 = time.perf_counter()
+    timing_plan: TimingPlan = {}
 
-    signal_timings: Dict[str, int] = {}
-    total_wait = 0.0
+    for iid, counts in traffic_input.items():
+        ns_c = counts["ns_count"]
+        ew_c = counts["ew_count"]
+        total = ns_c + ew_c
 
-    for key, score in congestion_map.items():
-        green_time = int(min_green + score * green_range)
-        signal_timings[key] = green_time
-        # Simplified wait model: congested intersections cause more wait
-        total_wait += score * green_time * 0.5
+        if total == 0:
+            ns_green = cycle_sec // 2   # equal split when no vehicles
+        else:
+            # Proportion of green time for NS approach
+            raw_ns = round((ns_c / total) * cycle_sec)
+            ns_green = max(MIN_GREEN, min(MAX_GREEN, raw_ns))
 
-    metrics = _compute_metrics(congestion_map, signal_timings)
+        ew_green = cycle_sec - ns_green
+        # Clamp ew_green and adjust ns_green to maintain cycle
+        ew_green = max(MIN_GREEN, min(MAX_GREEN, ew_green))
+        ns_green = cycle_sec - ew_green   # re-derive to keep sum = cycle_sec
 
-    return {
-        "method": "classical",
-        "signal_timings": signal_timings,
-        "total_wait_time": round(total_wait, 2),
-        "quantum_energy": None,
-        "iterations": 1,
-        "runtime_ms": 0,
-        "metrics": metrics,
-    }
+        timing_plan[iid] = ApproachTiming(ns_green=ns_green, ew_green=ew_green)
 
+    runtime_ms = (time.perf_counter() - t0) * 1000
 
-def _compute_metrics(
-    congestion_map: Dict[str, float],
-    signal_timings: Dict[str, int],
-) -> Dict[str, float]:
-    """Shared metric computation (also used by quantum solver)."""
-    n = len(congestion_map)
-    if n == 0:
-        return {"throughput": 0.0, "avg_wait": 0.0, "congestion_score": 0.0}
-
-    avg_congestion = sum(congestion_map.values()) / n
-    avg_green = sum(signal_timings.values()) / n
-    # Throughput heuristic: inversely proportional to congestion
-    throughput = round(max(0.0, 1.0 - avg_congestion), 4)
-    avg_wait = round(avg_congestion * 30, 2)   # crude model: 30s at full congestion
-    congestion_score = round(avg_congestion, 4)
-
-    return {
-        "throughput": throughput,
-        "avg_wait": avg_wait,
-        "congestion_score": congestion_score,
-    }
+    return evaluate(
+        traffic_input=traffic_input,
+        timing_plan=timing_plan,
+        algorithm="greedy",
+        runtime_ms=runtime_ms,
+        cost=None,   # no objective value for greedy
+    )
