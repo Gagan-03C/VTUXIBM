@@ -21,7 +21,7 @@ import numpy as np
 from shared.types import TrafficInput, SolverResult
 from shared.validators import validate_traffic_input
 from quantum.qubo_builder import build_qubo, decode_solution
-from metrics.evaluator import evaluate
+from metrics.traffic_model import evaluate
 from simulator.classical_solver import greedy_optimize   # used for timeout fallback
 
 
@@ -45,7 +45,7 @@ def run_qaoa(
         5. Optimise with COBYLA via qiskit_algorithms.minimum_eigensolvers.QAOA.
         6. Sample best bitstring from result.
         7. Decode → TimingPlan via qubo_builder.decode_solution().
-        8. Evaluate → SolverResult via metrics.evaluator.evaluate().
+        8. Evaluate → SolverResult via metrics.traffic_model.evaluate().
 
     Args:
         traffic_input:    TrafficInput — same format as classical solver.

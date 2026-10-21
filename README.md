@@ -51,9 +51,11 @@ quantumflow/
 ├── simulator/
 │   ├── traffic_env.py         ← N×N grid simulation
 │   ├── traffic_simulator.py   ← 4-intersection simulator (A, B, C, D)
+│   ├── baseline.py            ← Fixed-time & traffic-responsive controllers
 │   └── classical_solver.py    ← Greedy baseline
 ├── metrics/
-│   └── evaluator.py           ← ONLY place metrics are computed
+│   ├── traffic_model.py       ← Single source of truth for signal evaluation
+│   └── evaluator.py           ← Public facade for evaluate() & compare()
 ├── quantum/
 │   ├── qubo_builder.py        ← QUBO matrix + decode → TimingPlan
 │   └── qaoa_runner.py         ← Qiskit QAOA solver + mock
@@ -68,6 +70,8 @@ quantumflow/
 │   ├── test_validators.py
 │   ├── test_traffic_env.py
 │   ├── test_traffic_simulator.py
+│   ├── test_baseline.py
+│   ├── test_traffic_model.py
 │   ├── test_solvers.py
 │   ├── test_qubo.py
 │   └── test_api.py

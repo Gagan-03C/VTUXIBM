@@ -21,7 +21,7 @@ from shared.validators import (
     MIN_GREEN,
     MAX_GREEN,
 )
-from metrics.evaluator import evaluate
+from metrics.traffic_model import evaluate
 
 
 def greedy_optimize(

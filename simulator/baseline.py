@@ -19,7 +19,8 @@ Returns a TimingPlan in the same key format as the supplied TrafficInput
 
 from __future__ import annotations
 
-from shared.types import ApproachTiming, TrafficInput, TimingPlan
+from metrics.traffic_model import evaluate as evaluate_signal_plan
+from shared.types import ApproachTiming, SolverResult, TrafficInput, TimingPlan
 from shared.validators import (
     CYCLE_SEC,
     MAX_GREEN,
@@ -108,6 +109,14 @@ class FixedTimeController:
             cycle_sec=self.cycle_sec,
         )
 
+    def evaluate(self, traffic_input: TrafficInput) -> SolverResult:
+        """Score this controller's plan with the shared traffic model."""
+        return evaluate_signal_plan(
+            traffic_input,
+            self.plan(traffic_input),
+            algorithm="fixed-time",
+        )
+
 
 def _allocate_responsive_greens(
     ns_count: int,
@@ -182,3 +191,11 @@ class TrafficResponsiveController:
     def plan(self, traffic_input: TrafficInput) -> TimingPlan:
         """Return a validated demand-proportional TimingPlan."""
         return traffic_responsive_plan(traffic_input, cycle_sec=self.cycle_sec)
+
+    def evaluate(self, traffic_input: TrafficInput) -> SolverResult:
+        """Score this controller's plan with the shared traffic model."""
+        return evaluate_signal_plan(
+            traffic_input,
+            self.plan(traffic_input),
+            algorithm="traffic-responsive",
+        )
