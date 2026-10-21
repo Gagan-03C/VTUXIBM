@@ -64,7 +64,7 @@ def validate_traffic_input(traffic_input: TrafficInput) -> None:
 
 
 def _check_square_grid(keys: List[str]) -> None:
-    """Verify keys form a complete N×N grid."""
+    """Verify keys form a complete N×N grid with N >= 2."""
     coords = [_parse_key(k) for k in keys]
     rows = sorted(set(r for r, _ in coords))
     cols = sorted(set(c for _, c in coords))
@@ -73,6 +73,10 @@ def _check_square_grid(keys: List[str]) -> None:
             f"traffic_input: grid is not square — {len(rows)} row(s) vs {len(cols)} col(s)."
         )
     n = len(rows)
+    if n < 2:
+        raise ValueError(
+            f"traffic_input: grid must be at least 2×2, got {n}×{n}."
+        )
     expected = {(r, c) for r in range(n) for c in range(n)}
     actual = set(coords)
     if actual != expected:
