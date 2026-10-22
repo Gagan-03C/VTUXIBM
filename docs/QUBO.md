@@ -315,8 +315,8 @@ res = solve_traffic_qubo(
 )
 
 print("Best measured bitstring:", res["bitstring"])
-print("Objective value:", res["objective_value"])
+print("QUBO Energy (cost):", res["cost"])
 print("Runtime:", res["runtime_ms"], "ms")
-print("Vehicles served:", res["solver_result"]["metrics"]["vehicles_served"])
+print("Vehicles served:", res["metrics"]["vehicles_served"])
 ```
 
