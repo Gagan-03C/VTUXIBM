@@ -60,9 +60,12 @@ except ImportError:
 # App setup
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DASH_DIR = os.path.join(BASE_DIR, "..", "dashboard")
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, ".."))
+TEMPLATES_DIR = os.path.join(ROOT_DIR, "templates")
+STATIC_DIR = os.path.join(ROOT_DIR, "static")
+DASH_DIR = os.path.join(ROOT_DIR, "dashboard")
 
-app = Flask(__name__, static_folder=None)
+app = Flask(__name__, template_folder=TEMPLATES_DIR, static_folder=STATIC_DIR)
 CORS(app)  # Allow cross-origin requests from the dashboard frontend
 
 # In-memory session state
@@ -144,8 +147,11 @@ def handle_internal_error(exc):
 @app.route("/")
 def index():
     """Serve dashboard index.html if available, or return API status JSON."""
-    index_path = os.path.join(DASH_DIR, "index.html")
-    if os.path.isfile(index_path):
+    tmpl_path = os.path.join(TEMPLATES_DIR, "index.html")
+    if os.path.isfile(tmpl_path):
+        return send_from_directory(TEMPLATES_DIR, "index.html")
+    dash_path = os.path.join(DASH_DIR, "index.html")
+    if os.path.isfile(dash_path):
         return send_from_directory(DASH_DIR, "index.html")
     return _ok({
         "service": "QuantumFlow Traffic API",
@@ -168,11 +174,14 @@ def index():
 
 @app.route("/static/<path:filename>")
 def static_files(filename: str):
-    """Serve static dashboard assets."""
-    static_dir = os.path.join(DASH_DIR, "static")
-    if os.path.isdir(static_dir):
-        return send_from_directory(static_dir, filename)
-    return _error("Static assets not found.", code=404)
+    """Serve static dashboard assets from static/ or dashboard/static/."""
+    root_file = os.path.join(STATIC_DIR, filename)
+    if os.path.isfile(root_file):
+        return send_from_directory(STATIC_DIR, filename)
+    dash_file = os.path.join(DASH_DIR, "static", filename)
+    if os.path.isfile(dash_file):
+        return send_from_directory(os.path.join(DASH_DIR, "static"), filename)
+    return _error(f"Static asset '{filename}' not found.", code=404)
 
 
 # ---------------------------------------------------------------------------
@@ -615,7 +624,7 @@ def compare():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "0") == "1"
-    print(f"\n🚦 QuantumFlow API running on http://localhost:{port}")
+    print(f"\n[QuantumFlow] API running on http://localhost:{port}")
     print(f"   Quantum solver available: {_quantum_available}")
     print(f"   Endpoints: GET /, GET /api/traffic, POST /api/traffic,")
     print(f"              POST /api/optimize/baseline, POST /api/optimize/responsive,")
