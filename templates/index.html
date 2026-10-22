@@ -7,6 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Plotly.js for interactive traffic and solver performance visualizations -->
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -23,7 +25,7 @@
       </div>
       <div>
         <h1 class="brand-title">QuantumFlow</h1>
-        <p class="brand-subtitle">Adaptive Urban Traffic Signal Optimization & QAOA Solver</p>
+        <p class="brand-subtitle">Adaptive Urban Traffic Signal Optimization &amp; QAOA Solver</p>
       </div>
     </div>
 
@@ -43,7 +45,7 @@
   <div class="banner-container">
     <div id="status-banner" class="status-banner hidden">
       <div class="banner-content">
-        <span id="banner-icon" class="banner-icon">ℹ️</span>
+        <span id="banner-icon" class="banner-icon">&#9432;</span>
         <span id="banner-message" class="banner-message">Status message here.</span>
       </div>
       <button id="btn-banner-close" class="banner-close" aria-label="Dismiss">&times;</button>
@@ -55,7 +57,7 @@
     <section class="card section-traffic">
       <div class="section-header">
         <div>
-          <h2 class="section-title">Traffic Queue State & Scenario Presets</h2>
+          <h2 class="section-title">Traffic Queue State &amp; Scenario Presets</h2>
           <p class="section-desc">Select a preset traffic scenario or adjust queue counts for all 4 intersections.</p>
         </div>
         <div class="scenario-buttons">
@@ -64,38 +66,49 @@
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-medium" data-scenario="medium">Medium</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-heavy" data-scenario="heavy">Heavy</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-zero" data-scenario="zero">Zero Traffic</button>
-          <button type="button" class="btn btn-outline" id="btn-refresh-traffic" title="Reload from server">↻ Refresh</button>
+          <button type="button" class="btn btn-outline" id="btn-refresh-traffic" title="Reload from server">&#8635; Refresh</button>
         </div>
       </div>
 
-      <!-- 4 Intersection Cards -->
+      <!-- 4 Intersection Cards with Density Indicators & Approach Durations -->
       <div class="intersections-grid" id="intersections-container">
         <!-- Intersection A -->
         <div class="intersection-card" id="card-intersection-A" data-iid="A">
           <div class="card-header">
-            <span class="card-title">Intersection A</span>
+            <div class="card-header-left">
+              <span class="card-title">Intersection A</span>
+              <span class="density-badge density-high" id="density-badge-A" title="Overall traffic density indicator">High (57 veh)</span>
+            </div>
             <span class="card-badge" id="badge-timing-A">30s / 30s</span>
           </div>
           <div class="queue-inputs">
             <div class="input-group">
-              <label for="input-ns-A">North-South (NS)</label>
+              <div class="input-label-row">
+                <label for="input-ns-A">North-South (NS)</label>
+                <span class="approach-density-tag density-high" id="density-tag-ns-A">High</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ns-A" class="queue-input" data-iid="A" data-dir="ns" min="0" max="200" value="45">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-high" id="density-dot-ns-A" title="Approach density"></span>
               </div>
             </div>
             <div class="input-group">
-              <label for="input-ew-A">East-West (EW)</label>
+              <div class="input-label-row">
+                <label for="input-ew-A">East-West (EW)</label>
+                <span class="approach-density-tag density-low" id="density-tag-ew-A">Low</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ew-A" class="queue-input" data-iid="A" data-dir="ew" min="0" max="200" value="12">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-low" id="density-dot-ew-A" title="Approach density"></span>
               </div>
             </div>
           </div>
           <div class="signal-bar-wrapper">
             <div class="signal-label-row">
-              <span id="label-ns-A">NS: 30s</span>
-              <span id="label-ew-A">EW: 30s</span>
+              <span id="label-ns-A" class="approach-green-text"><span class="approach-dot dot-ns"></span>NS Green: <strong id="val-ns-A">30s</strong> (<span id="pct-ns-A">50%</span>)</span>
+              <span id="label-ew-A" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-A">30s</strong> (<span id="pct-ew-A">50%</span>)</span>
             </div>
             <div class="signal-bar">
               <div class="signal-segment signal-ns" id="bar-ns-A" style="width: 50%;"></div>
@@ -107,29 +120,40 @@
         <!-- Intersection B -->
         <div class="intersection-card" id="card-intersection-B" data-iid="B">
           <div class="card-header">
-            <span class="card-title">Intersection B</span>
+            <div class="card-header-left">
+              <span class="card-title">Intersection B</span>
+              <span class="density-badge density-mod" id="density-badge-B" title="Overall traffic density indicator">Moderate (50 veh)</span>
+            </div>
             <span class="card-badge" id="badge-timing-B">30s / 30s</span>
           </div>
           <div class="queue-inputs">
             <div class="input-group">
-              <label for="input-ns-B">North-South (NS)</label>
+              <div class="input-label-row">
+                <label for="input-ns-B">North-South (NS)</label>
+                <span class="approach-density-tag density-mod" id="density-tag-ns-B">Mod</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ns-B" class="queue-input" data-iid="B" data-dir="ns" min="0" max="200" value="30">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-mod" id="density-dot-ns-B" title="Approach density"></span>
               </div>
             </div>
             <div class="input-group">
-              <label for="input-ew-B">East-West (EW)</label>
+              <div class="input-label-row">
+                <label for="input-ew-B">East-West (EW)</label>
+                <span class="approach-density-tag density-mod" id="density-tag-ew-B">Mod</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ew-B" class="queue-input" data-iid="B" data-dir="ew" min="0" max="200" value="20">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-mod" id="density-dot-ew-B" title="Approach density"></span>
               </div>
             </div>
           </div>
           <div class="signal-bar-wrapper">
             <div class="signal-label-row">
-              <span id="label-ns-B">NS: 30s</span>
-              <span id="label-ew-B">EW: 30s</span>
+              <span id="label-ns-B" class="approach-green-text"><span class="approach-dot dot-ns"></span>NS Green: <strong id="val-ns-B">30s</strong> (<span id="pct-ns-B">50%</span>)</span>
+              <span id="label-ew-B" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-B">30s</strong> (<span id="pct-ew-B">50%</span>)</span>
             </div>
             <div class="signal-bar">
               <div class="signal-segment signal-ns" id="bar-ns-B" style="width: 50%;"></div>
@@ -141,29 +165,40 @@
         <!-- Intersection C -->
         <div class="intersection-card" id="card-intersection-C" data-iid="C">
           <div class="card-header">
-            <span class="card-title">Intersection C</span>
+            <div class="card-header-left">
+              <span class="card-title">Intersection C</span>
+              <span class="density-badge density-mod" id="density-badge-C" title="Overall traffic density indicator">Moderate (50 veh)</span>
+            </div>
             <span class="card-badge" id="badge-timing-C">30s / 30s</span>
           </div>
           <div class="queue-inputs">
             <div class="input-group">
-              <label for="input-ns-C">North-South (NS)</label>
+              <div class="input-label-row">
+                <label for="input-ns-C">North-South (NS)</label>
+                <span class="approach-density-tag density-low" id="density-tag-ns-C">Low</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ns-C" class="queue-input" data-iid="C" data-dir="ns" min="0" max="200" value="10">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-low" id="density-dot-ns-C" title="Approach density"></span>
               </div>
             </div>
             <div class="input-group">
-              <label for="input-ew-C">East-West (EW)</label>
+              <div class="input-label-row">
+                <label for="input-ew-C">East-West (EW)</label>
+                <span class="approach-density-tag density-high" id="density-tag-ew-C">High</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ew-C" class="queue-input" data-iid="C" data-dir="ew" min="0" max="200" value="40">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-high" id="density-dot-ew-C" title="Approach density"></span>
               </div>
             </div>
           </div>
           <div class="signal-bar-wrapper">
             <div class="signal-label-row">
-              <span id="label-ns-C">NS: 30s</span>
-              <span id="label-ew-C">EW: 30s</span>
+              <span id="label-ns-C" class="approach-green-text"><span class="approach-dot dot-ns"></span>NS Green: <strong id="val-ns-C">30s</strong> (<span id="pct-ns-C">50%</span>)</span>
+              <span id="label-ew-C" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-C">30s</strong> (<span id="pct-ew-C">50%</span>)</span>
             </div>
             <div class="signal-bar">
               <div class="signal-segment signal-ns" id="bar-ns-C" style="width: 50%;"></div>
@@ -175,29 +210,40 @@
         <!-- Intersection D -->
         <div class="intersection-card" id="card-intersection-D" data-iid="D">
           <div class="card-header">
-            <span class="card-title">Intersection D</span>
+            <div class="card-header-left">
+              <span class="card-title">Intersection D</span>
+              <span class="density-badge density-mod" id="density-badge-D" title="Overall traffic density indicator">Moderate (40 veh)</span>
+            </div>
             <span class="card-badge" id="badge-timing-D">30s / 30s</span>
           </div>
           <div class="queue-inputs">
             <div class="input-group">
-              <label for="input-ns-D">North-South (NS)</label>
+              <div class="input-label-row">
+                <label for="input-ns-D">North-South (NS)</label>
+                <span class="approach-density-tag density-mod" id="density-tag-ns-D">Mod</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ns-D" class="queue-input" data-iid="D" data-dir="ns" min="0" max="200" value="25">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-mod" id="density-dot-ns-D" title="Approach density"></span>
               </div>
             </div>
             <div class="input-group">
-              <label for="input-ew-D">East-West (EW)</label>
+              <div class="input-label-row">
+                <label for="input-ew-D">East-West (EW)</label>
+                <span class="approach-density-tag density-mod" id="density-tag-ew-D">Mod</span>
+              </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ew-D" class="queue-input" data-iid="D" data-dir="ew" min="0" max="200" value="15">
                 <span class="input-unit">veh</span>
+                <span class="density-indicator-dot dot-mod" id="density-dot-ew-D" title="Approach density"></span>
               </div>
             </div>
           </div>
           <div class="signal-bar-wrapper">
             <div class="signal-label-row">
-              <span id="label-ns-D">NS: 30s</span>
-              <span id="label-ew-D">EW: 30s</span>
+              <span id="label-ns-D" class="approach-green-text"><span class="approach-dot dot-ns"></span>NS Green: <strong id="val-ns-D">30s</strong> (<span id="pct-ns-D">50%</span>)</span>
+              <span id="label-ew-D" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-D">30s</strong> (<span id="pct-ew-D">50%</span>)</span>
             </div>
             <div class="signal-bar">
               <div class="signal-segment signal-ns" id="bar-ns-D" style="width: 50%;"></div>
@@ -219,6 +265,12 @@
         <div>
           <h2 class="section-title">Signal Optimization Control Engine</h2>
           <p class="section-desc">Trigger any optimization method against the active traffic input. All calculations run on the backend.</p>
+        </div>
+        <div>
+          <button type="button" class="btn btn-primary" id="btn-optimize-all">
+            <span class="btn-text">&#9889; Run All &amp; Compare</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
         </div>
       </div>
 
@@ -254,7 +306,7 @@
           <div class="optimizer-meta">
             <span class="opt-tag tag-quantum">Genuine Quantum</span>
             <h3 class="opt-name">QAOA Quantum Solver</h3>
-            <p class="opt-desc">Qiskit Aer Sampler & COBYLA optimizing exact traffic QUBO.</p>
+            <p class="opt-desc">Qiskit Aer Sampler &amp; COBYLA optimizing exact traffic QUBO.</p>
           </div>
           <button type="button" class="btn btn-quantum btn-block" id="btn-optimize-qaoa">
             <span class="btn-text">Run QAOA Quantum</span>
@@ -299,7 +351,7 @@
     <section class="card section-metrics">
       <div class="section-header">
         <div>
-          <h2 class="section-title">Latest Execution Metrics & Key Performance Indicators</h2>
+          <h2 class="section-title">Latest Execution Metrics &amp; Key Performance Indicators</h2>
           <p class="section-desc">Active algorithm: <strong id="active-algo-name">Fixed-Time Baseline</strong> (Status: <span id="active-algo-status" class="status-ok">ok</span>)</p>
         </div>
         <div id="bitstring-display-wrapper" class="bitstring-wrapper hidden">
@@ -348,14 +400,84 @@
       </div>
     </section>
 
-    <!-- Row 4: Run History & Comparison Table -->
+    <!-- Row 4: Plotly Comparative Performance Visualizations -->
+    <section class="card section-charts" id="section-charts">
+      <div class="section-header">
+        <div>
+          <div class="charts-title-row">
+            <h2 class="section-title">Comparative Performance Visualizations</h2>
+            <span class="sim-disclaimer-pill">&#9432; Simulated Macroscopic Traffic Model &bull; Local Qiskit Aer &bull; Units: veh, s, ms</span>
+          </div>
+          <p class="section-desc">Side-by-side performance evaluation on the identical traffic queue state. Populated directly from live Flask API responses.</p>
+        </div>
+        <div class="charts-header-actions">
+          <span class="traffic-context-badge" id="charts-traffic-context">Input: Active Queue (197 veh)</span>
+          <button type="button" class="btn btn-primary" id="btn-charts-compare-all">
+            <span class="btn-text">&#9889; Compare All (Baseline, Responsive, QAOA)</span>
+            <span class="btn-spinner hidden"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="charts-grid">
+        <!-- Chart 1: Delay Metrics -->
+        <div class="chart-card" id="card-chart-delays">
+          <div class="chart-card-header">
+            <div>
+              <h3 class="chart-card-title">Delay Metrics (Total Delay &amp; Avg Waiting Time)</h3>
+              <p class="chart-card-desc">Estimated Total Delay across network vs Estimated Avg Wait Time per vehicle.</p>
+            </div>
+            <span class="chart-unit-badge">Units: Seconds (s) &bull; Lower is better</span>
+          </div>
+          <div id="chart-delays" class="plotly-container"></div>
+        </div>
+
+        <!-- Chart 2: Vehicles Served vs Remaining Queue -->
+        <div class="chart-card" id="card-chart-throughput">
+          <div class="chart-card-header">
+            <div>
+              <h3 class="chart-card-title">Vehicle Throughput (Served vs Remaining Queue)</h3>
+              <p class="chart-card-desc">Estimated vehicles served during green phase vs unserved remaining queue counts.</p>
+            </div>
+            <span class="chart-unit-badge">Units: Vehicle Counts (veh)</span>
+          </div>
+          <div id="chart-throughput" class="plotly-container"></div>
+        </div>
+
+        <!-- Chart 3: Green-Light Durations per Approach -->
+        <div class="chart-card" id="card-chart-timings">
+          <div class="chart-card-header">
+            <div>
+              <h3 class="chart-card-title">Green-Light Durations per Approach (NS vs EW)</h3>
+              <p class="chart-card-desc">Signal phase split comparison across intersections A, B, C, D for each algorithm.</p>
+            </div>
+            <span class="chart-unit-badge">Units: Seconds (s) &bull; Cycle = 60s</span>
+          </div>
+          <div id="chart-timings" class="plotly-container"></div>
+        </div>
+
+        <!-- Chart 4: Solver Runtime & Computational Overhead -->
+        <div class="chart-card" id="card-chart-runtime">
+          <div class="chart-card-header">
+            <div>
+              <h3 class="chart-card-title">Solver Computational Runtime</h3>
+              <p class="chart-card-desc">Wall-clock latency (Classical Fixed-Time vs Responsive vs QAOA Quantum).</p>
+            </div>
+            <span class="chart-unit-badge">Units: Milliseconds (ms)</span>
+          </div>
+          <div id="chart-runtime" class="plotly-container"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 5: Run History & Comparison Table -->
     <section class="card section-history">
       <div class="section-header">
         <div>
-          <h2 class="section-title">Optimization Run History & Comparison Log</h2>
+          <h2 class="section-title">Optimization Run History &amp; Comparison Log</h2>
           <p class="section-desc">Recent controller runs retrieved directly from <code class="endpoint-code">GET /api/results</code>.</p>
         </div>
-        <button type="button" class="btn btn-outline" id="btn-refresh-history">↻ Refresh Log</button>
+        <button type="button" class="btn btn-outline" id="btn-refresh-history">&#8635; Refresh Log</button>
       </div>
 
       <div class="table-responsive">
@@ -387,7 +509,7 @@
 
   <!-- App Footer -->
   <footer class="app-footer">
-    <p>QuantumFlow v1.0 · Powered by Qiskit Aer &amp; Flask · Architecture Contract: <code>docs/INTERFACES.md</code></p>
+    <p>QuantumFlow v1.0 &middot; Powered by Qiskit Aer &amp; Flask &middot; Architecture Contract: <code>docs/INTERFACES.md</code></p>
   </footer>
 
   <script src="/static/dashboard.js"></script>
