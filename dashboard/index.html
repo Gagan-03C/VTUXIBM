@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QuantumFlow — Adaptive Traffic Signal Optimization</title>
+  <title>QuantumFlow — Adaptive Traffic Signal Optimization &amp; QAOA Solver</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -25,19 +25,20 @@
       </div>
       <div>
         <h1 class="brand-title">QuantumFlow</h1>
-        <p class="brand-subtitle">Adaptive Urban Traffic Signal Optimization &amp; QAOA Solver</p>
+        <p class="brand-subtitle">Adaptive Urban Traffic Signal Optimization &amp; QAOA Quantum Solver</p>
       </div>
     </div>
 
     <div class="header-status-group">
-      <div class="status-pill status-quantum" id="quantum-backend-badge">
+      <div class="status-pill status-quantum" id="quantum-backend-badge" title="Local Qiskit Aer Sampler primitive">
         <span class="status-dot"></span>
-        <span>Qiskit Aer (Local Simulation)</span>
+        <span>Qiskit Aer (Local Quantum Simulation)</span>
       </div>
       <div class="status-pill" id="total-demand-pill">
         <span>Active Demand:</span>
         <strong id="header-total-vehicles">197 veh</strong>
       </div>
+      <a href="#section-theory" class="nav-link-pill">📖 Theory &amp; Physics</a>
     </div>
   </header>
 
@@ -57,20 +58,28 @@
     <section class="card section-traffic">
       <div class="section-header">
         <div>
-          <h2 class="section-title">Traffic Queue State &amp; Scenario Presets</h2>
-          <p class="section-desc">Select a preset traffic scenario or adjust queue counts for all 4 intersections.</p>
+          <div class="title-with-badge">
+            <h2 class="section-title">Traffic Queue State &amp; Scenario Presets</h2>
+            <div class="density-legend">
+              <span class="legend-item"><span class="legend-dot dot-low"></span> Low (&lt;15)</span>
+              <span class="legend-item"><span class="legend-dot dot-mod"></span> Mod (15–30)</span>
+              <span class="legend-item"><span class="legend-dot dot-high"></span> High (31–45)</span>
+              <span class="legend-item"><span class="legend-dot dot-congested"></span> Congested (&gt;45)</span>
+            </div>
+          </div>
+          <p class="section-desc">Select a preset traffic scenario or adjust queue counts directly. Modifying inputs marks results as outdated until re-evaluated.</p>
         </div>
         <div class="scenario-buttons">
-          <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-benchmark" data-scenario="benchmark">Initial Benchmark</button>
+          <button type="button" class="btn btn-secondary scenario-btn active" id="btn-scenario-benchmark" data-scenario="benchmark">Initial Benchmark</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-light" data-scenario="light">Light</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-medium" data-scenario="medium">Medium</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-heavy" data-scenario="heavy">Heavy</button>
           <button type="button" class="btn btn-secondary scenario-btn" id="btn-scenario-zero" data-scenario="zero">Zero Traffic</button>
-          <button type="button" class="btn btn-outline" id="btn-refresh-traffic" title="Reload from server">&#8635; Refresh</button>
+          <button type="button" class="btn btn-outline" id="btn-refresh-traffic" title="Reload from server">&#8635; Reload</button>
         </div>
       </div>
 
-      <!-- 4 Intersection Cards with Density Indicators & Approach Durations -->
+      <!-- 4 Intersection Cards with Directional Icons, Density Badges, and Durations -->
       <div class="intersections-grid" id="intersections-container">
         <!-- Intersection A -->
         <div class="intersection-card" id="card-intersection-A" data-iid="A">
@@ -84,7 +93,7 @@
           <div class="queue-inputs">
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ns-A">North-South (NS)</label>
+                <label for="input-ns-A"><span class="dir-icon">↕</span> North-South (NS)</label>
                 <span class="approach-density-tag density-high" id="density-tag-ns-A">High</span>
               </div>
               <div class="input-wrapper">
@@ -95,7 +104,7 @@
             </div>
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ew-A">East-West (EW)</label>
+                <label for="input-ew-A"><span class="dir-icon">↔</span> East-West (EW)</label>
                 <span class="approach-density-tag density-low" id="density-tag-ew-A">Low</span>
               </div>
               <div class="input-wrapper">
@@ -129,7 +138,7 @@
           <div class="queue-inputs">
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ns-B">North-South (NS)</label>
+                <label for="input-ns-B"><span class="dir-icon">↕</span> North-South (NS)</label>
                 <span class="approach-density-tag density-mod" id="density-tag-ns-B">Mod</span>
               </div>
               <div class="input-wrapper">
@@ -140,7 +149,7 @@
             </div>
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ew-B">East-West (EW)</label>
+                <label for="input-ew-B"><span class="dir-icon">↔</span> East-West (EW)</label>
                 <span class="approach-density-tag density-mod" id="density-tag-ew-B">Mod</span>
               </div>
               <div class="input-wrapper">
@@ -153,7 +162,7 @@
           <div class="signal-bar-wrapper">
             <div class="signal-label-row">
               <span id="label-ns-B" class="approach-green-text"><span class="approach-dot dot-ns"></span>NS Green: <strong id="val-ns-B">30s</strong> (<span id="pct-ns-B">50%</span>)</span>
-              <span id="label-ew-B" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-B">30s</strong> (<span id="pct-ew-A">50%</span>)</span>
+              <span id="label-ew-B" class="approach-green-text"><span class="approach-dot dot-ew"></span>EW Green: <strong id="val-ew-B">30s</strong> (<span id="pct-ew-B">50%</span>)</span>
             </div>
             <div class="signal-bar">
               <div class="signal-segment signal-ns" id="bar-ns-B" style="width: 50%;"></div>
@@ -174,7 +183,7 @@
           <div class="queue-inputs">
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ns-C">North-South (NS)</label>
+                <label for="input-ns-C"><span class="dir-icon">↕</span> North-South (NS)</label>
                 <span class="approach-density-tag density-low" id="density-tag-ns-C">Low</span>
               </div>
               <div class="input-wrapper">
@@ -185,8 +194,8 @@
             </div>
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ew-C">East-West (EW)</label>
-                <span class="approach-density-tag density-high" id="density-tag-ew-C">High</span>
+                <label for="input-ew-C"><span class="dir-icon">↔</span> East-West (EW)</label>
+                <span class="approach-density-tag density-high" id="density-tag-ns-C">High</span>
               </div>
               <div class="input-wrapper">
                 <input type="number" id="input-ew-C" class="queue-input" data-iid="C" data-dir="ew" min="0" max="200" value="40">
@@ -219,7 +228,7 @@
           <div class="queue-inputs">
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ns-D">North-South (NS)</label>
+                <label for="input-ns-D"><span class="dir-icon">↕</span> North-South (NS)</label>
                 <span class="approach-density-tag density-mod" id="density-tag-ns-D">Mod</span>
               </div>
               <div class="input-wrapper">
@@ -230,7 +239,7 @@
             </div>
             <div class="input-group">
               <div class="input-label-row">
-                <label for="input-ew-D">East-West (EW)</label>
+                <label for="input-ew-D"><span class="dir-icon">↔</span> East-West (EW)</label>
                 <span class="approach-density-tag density-mod" id="density-tag-ew-D">Mod</span>
               </div>
               <div class="input-wrapper">
@@ -264,10 +273,10 @@
       <div class="section-header">
         <div>
           <h2 class="section-title">Signal Optimization Control Engine</h2>
-          <p class="section-desc">Trigger any optimization method against the active traffic input. All calculations run on the backend.</p>
+          <p class="section-desc">Trigger any optimization method against the active traffic snapshot. Calculations run exclusively on backend domain solvers.</p>
         </div>
         <div>
-          <button type="button" class="btn btn-primary" id="btn-optimize-all">
+          <button type="button" class="btn btn-primary btn-pulse-highlight" id="btn-optimize-all">
             <span class="btn-text">&#9889; Run All &amp; Compare</span>
             <span class="btn-spinner hidden"></span>
           </button>
@@ -293,7 +302,7 @@
           <div class="optimizer-meta">
             <span class="opt-tag tag-responsive">Adaptive Classical</span>
             <h3 class="opt-name">Traffic-Responsive</h3>
-            <p class="opt-desc">Demand-proportional queue split clamped to [15s, 45s].</p>
+            <p class="opt-desc">Demand-proportional queue split clamped to safe bounds [15s, 45s].</p>
           </div>
           <button type="button" class="btn btn-responsive btn-block" id="btn-optimize-responsive">
             <span class="btn-text">Run Traffic-Responsive</span>
@@ -360,8 +369,27 @@
         </div>
       </div>
 
+      <!-- Stale Data Warning Banner (Appears when traffic input is edited) -->
+      <div class="stale-alert-banner hidden" id="stale-alert-banner">
+        <div class="stale-alert-content">
+          <span class="stale-icon">⚠️</span>
+          <span><strong>Traffic State Modified:</strong> Displayed metrics and charts reflect the previous traffic snapshot. Click <em>Run All &amp; Compare</em> to evaluate the new queue counts.</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-primary" id="btn-stale-recalculate">⚡ Re-run All Solvers</button>
+      </div>
+
+      <!-- Prominent QAOA Failure Alert Card (Visible only when QAOA fails) -->
+      <div class="qaoa-failure-card hidden" id="qaoa-failure-card">
+        <div class="failure-header">
+          <span class="failure-badge">QAOA Simulation Alert</span>
+          <span class="failure-status-code" id="qaoa-failure-status">Status: Error</span>
+        </div>
+        <p class="failure-msg" id="qaoa-failure-msg">Circuit simulation encountered an issue or timeout.</p>
+        <p class="failure-note">Notice: A safe equal-split fallback timing plan was attached to ensure system continuity, but metrics are marked unoptimized.</p>
+      </div>
+
       <!-- KPI Grid -->
-      <div class="kpi-grid">
+      <div class="kpi-grid" id="kpi-grid">
         <div class="kpi-card">
           <span class="kpi-label">Total Vehicles Queued</span>
           <span class="kpi-value" id="kpi-total-vehicles">197</span>
@@ -470,7 +498,61 @@
       </div>
     </section>
 
-    <!-- Row 5: Run History & Comparison Table -->
+    <!-- Row 5: Hackathon Explanatory Panel: Physics & Quantum Optimization -->
+    <section class="card section-theory" id="section-theory">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">Theoretical Foundations: Traffic Physics &amp; Quantum Optimization</h2>
+          <p class="section-desc">Technical overview of the deterministic macroscopic queue dynamics and QAOA variational mapping.</p>
+        </div>
+      </div>
+
+      <div class="theory-grid">
+        <!-- Card 1: Traffic Simulator Physics -->
+        <div class="theory-card">
+          <div class="theory-card-header">
+            <span class="theory-tag tag-model">Macroscopic Flow Physics</span>
+            <h3 class="theory-card-title">Deterministic Queue Service Model</h3>
+          </div>
+          <p class="theory-text">
+            QuantumFlow simulates vehicle congestion across a coordinated 4-intersection network using a deterministic macroscopic queue formulation with zero client-side extrapolation:
+          </p>
+          <ul class="theory-list">
+            <li><strong>Cycle Time ($T_{cycle}$):</strong> Fixed 60-second cycle length where $g_{\text{NS}} + g_{\text{EW}} = 60\text{ s}$ for every intersection.</li>
+            <li><strong>Safety Clamps:</strong> Green durations are strictly bounded to $[15\text{s}, 45\text{s}]$ per approach to ensure pedestrian crossing safety and prevent starvation.</li>
+            <li><strong>Saturation Headway ($h$):</strong> Vehicles clear at a rate of $2.0\text{ s/veh}$ ($0.5\text{ veh/s}$ clearance rate), yielding capacity $C = \lfloor g / 2.0 \rfloor$ vehicles/cycle.</li>
+            <li><strong>Leftover Red Delay:</strong> Unserved vehicles incur delay during the opposing red phase: $\text{Delay} = \text{Remaining} \times (60 - g)$.</li>
+          </ul>
+        </div>
+
+        <!-- Card 2: Conventional vs QAOA Solver -->
+        <div class="theory-card">
+          <div class="theory-card-header">
+            <span class="theory-tag tag-quantum">Quantum vs Classical</span>
+            <h3 class="theory-card-title">Conventional vs. QAOA Quantum Solver</h3>
+          </div>
+          <p class="theory-text">
+            Traffic signal optimization across coupled urban grids is NP-hard. QuantumFlow directly compares conventional heuristic control with genuine quantum optimization:
+          </p>
+          <div class="comparison-breakdown">
+            <div class="breakdown-item">
+              <span class="breakdown-title text-amber">Fixed-Time Baseline (Classical):</span>
+              <p>Applies a static $30\text{s}/30\text{s}$ split across all nodes. Inflexible to demand spikes, serving as the benchmark standard.</p>
+            </div>
+            <div class="breakdown-item">
+              <span class="breakdown-title text-emerald">Traffic-Responsive (Adaptive Classical):</span>
+              <p>Dynamically partitions green time proportionally to local queue ratios: $g_{\text{NS}} \propto \frac{q_{\text{NS}}}{q_{\text{NS}} + q_{\text{EW}}}$, clamped to $[15\text{s}, 45\text{s}]$. Fast and effective for independent intersections.</p>
+            </div>
+            <div class="breakdown-item item-quantum">
+              <span class="breakdown-title text-cyan">QAOA Quantum Solver (Genuine Qiskit Aer):</span>
+              <p>Encodes the global 4-intersection binary timing decision into an exact Ising Hamiltonian $H_C = \sum_i h_i Z_i + \sum_{i &lt; j} J_{ij} Z_i Z_j$. Variational quantum circuits $U(B,\beta)U(C,\gamma)|+\rangle^{\otimes 4}$ are sampled on Qiskit Aer with a classical COBYLA loop optimizer to find the minimum-delay state.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 6: Run History & Comparison Table -->
     <section class="card section-history">
       <div class="section-header">
         <div>

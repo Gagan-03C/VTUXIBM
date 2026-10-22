@@ -76,8 +76,52 @@ document.addEventListener("DOMContentLoaded", () => {
   const tableResultsBody = document.getElementById("table-results-body");
   const btnRefreshHistory = document.getElementById("btn-refresh-history");
 
+  // Hackathon Polish: Stale Data & QAOA Failure Indicators
+  const staleAlertBanner = document.getElementById("stale-alert-banner");
+  const btnStaleRecalculate = document.getElementById("btn-stale-recalculate");
+  const qaoaFailureCard = document.getElementById("qaoa-failure-card");
+  const qaoaFailureStatus = document.getElementById("qaoa-failure-status");
+  const qaoaFailureMsg = document.getElementById("qaoa-failure-msg");
+  const kpiGrid = document.getElementById("kpi-grid");
+
+  // -------------------------------------------------------------------------
+  // Stale State & Failure Display Helpers
+  // -------------------------------------------------------------------------
+  function markResultsStale(isStale) {
+    if (isStale) {
+      if (staleAlertBanner) staleAlertBanner.classList.remove("hidden");
+      if (kpiGrid) kpiGrid.classList.add("kpi-stale");
+      if (activeAlgoStatus) {
+        activeAlgoStatus.textContent = "Outdated";
+        activeAlgoStatus.className = "status-badge status-stale";
+      }
+      if (chartsTrafficContext) {
+        chartsTrafficContext.textContent = "⚠️ Input Modified — Re-run Required";
+      }
+    } else {
+      if (staleAlertBanner) staleAlertBanner.classList.add("hidden");
+      if (kpiGrid) kpiGrid.classList.remove("kpi-stale");
+    }
+  }
+
+  function updateQAOAFailureState(data) {
+    if (!qaoaFailureCard) return;
+    if (data && (data.status !== "ok" || (data.solver_status && data.solver_status !== "ok"))) {
+      qaoaFailureCard.classList.remove("hidden");
+      if (qaoaFailureStatus) {
+        qaoaFailureStatus.textContent = `Status: ${data.solver_status || data.status || "error"}`;
+      }
+      if (qaoaFailureMsg) {
+        qaoaFailureMsg.textContent = data.error_msg || data.message || "QAOA quantum circuit simulation encountered an error or timeout.";
+      }
+    } else {
+      qaoaFailureCard.classList.add("hidden");
+    }
+  }
+
   // -------------------------------------------------------------------------
   // In-Memory Comparison Cache (Stores Real API Responses on Current Traffic)
+
   // -------------------------------------------------------------------------
   const comparisonState = {
     trafficKey: null,
@@ -203,9 +247,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const currentKey = getCurrentTrafficKey();
     if (comparisonState.trafficKey && comparisonState.trafficKey !== currentKey) {
       // Mark comparison state outdated
+      markResultsStale(true);
       if (chartsTrafficContext) {
         chartsTrafficContext.textContent = `Input changed (${totalQueued} veh) — Click 'Compare All' to refresh`;
       }
+    } else if (comparisonState.trafficKey && comparisonState.trafficKey === currentKey) {
+      markResultsStale(false);
     }
   }
 
@@ -356,7 +403,14 @@ document.addEventListener("DOMContentLoaded", () => {
   // -------------------------------------------------------------------------
   async function runSingleOptimization(endpoint, buttonEl, algoKey, payload = {}) {
     hideBanner();
-    setButtonLoading(buttonEl, true);
+    markResultsStale(false);
+
+    let loadingMsg = "Optimizing...";
+    if (algoKey === "baseline") loadingMsg = "Fixed-Time...";
+    else if (algoKey === "responsive") loadingMsg = "Responsive...";
+    else if (algoKey === "qaoa") loadingMsg = "QAOA (Aer)...";
+
+    setButtonLoading(buttonEl, true, loadingMsg);
 
     try {
       const res = await fetch(endpoint, {
@@ -381,6 +435,7 @@ document.addEventListener("DOMContentLoaded", () => {
       comparisonState[algoKey] = data;
 
       renderSolverResult(data);
+      updateQAOAFailureState(comparisonState.qaoa);
       renderPlotlyCharts();
       showBanner(`Optimization complete: ${formatAlgorithmName(data.algorithm)} (${data.solver_status || "ok"}).`, "success");
       loadResultsHistory();
@@ -394,6 +449,7 @@ document.addEventListener("DOMContentLoaded", () => {
           message: err.message,
           runtime_ms: 0,
         };
+        updateQAOAFailureState(comparisonState.qaoa);
         renderPlotlyCharts();
       }
     } finally {
@@ -406,14 +462,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // -------------------------------------------------------------------------
   async function runAllSolversAndCompare() {
     hideBanner();
+    markResultsStale(false);
     const trafficInput = getCurrentTrafficInput();
     const currentKey = JSON.stringify(trafficInput);
 
-    setButtonLoading(btnOptimizeAll, true, "Running All...");
-    setButtonLoading(btnChartsCompareAll, true, "Running All...");
-    setButtonLoading(btnOptBaseline, true, "...");
-    setButtonLoading(btnOptResponsive, true, "...");
-    setButtonLoading(btnOptQAOA, true, "...");
+    setButtonLoading(btnOptimizeAll, true, "Simulating All 3 Solvers...");
+    setButtonLoading(btnChartsCompareAll, true, "Simulating All 3 Solvers...");
+    setButtonLoading(btnOptBaseline, true, "Fixed-Time...");
+    setButtonLoading(btnOptResponsive, true, "Responsive...");
+    setButtonLoading(btnOptQAOA, true, "QAOA (Aer)...");
 
     // QAOA tuning params
     const pVal = parseInt(selectQAOAP?.value || "1", 10) || 1;
@@ -494,6 +551,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (primaryResult) {
         renderSolverResult(primaryResult);
       }
+      updateQAOAFailureState(comparisonState.qaoa);
 
       // Update all 4 Plotly charts with the new data
       renderPlotlyCharts();
@@ -615,8 +673,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const baseMetrics = baseline?.metrics || null;
     const respMetrics = responsive?.metrics || null;
-    const qaoaMetrics = qaoa?.status === "ok" ? qaoa?.metrics : null;
-    const qaoaFailed = qaoa && qaoa.status !== "ok";
+    const isQAOAValid = qaoa && qaoa.status === "ok" && (!qaoa.solver_status || qaoa.solver_status === "ok");
+    const qaoaMetrics = isQAOAValid ? qaoa?.metrics : null;
+    const qaoaFailed = qaoa && (qaoa.status !== "ok" || (qaoa.solver_status && qaoa.solver_status !== "ok"));
 
     const algoCategories = ["Fixed-Time (Baseline)", "Traffic-Responsive", "QAOA Quantum"];
 
@@ -686,10 +745,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const annotations = [];
       if (qaoaFailed) {
+        const failText = qaoa?.solver_status === "timeout" ? "QAOA: Timeout (Limit Exceeded)" : "QAOA: Failed / Error";
         annotations.push({
           x: "QAOA Quantum",
           y: 0,
-          text: "QAOA: Failed / Timeout",
+          text: failText,
           showarrow: false,
           font: { color: "#ef4444", size: 10, family: "Inter, sans-serif" },
           bgcolor: "rgba(239, 68, 68, 0.15)",
@@ -766,10 +826,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const annotationsThroughput = [];
       if (qaoaFailed) {
+        const failText = qaoa?.solver_status === "timeout" ? "QAOA: Timeout" : "QAOA: Execution Failed";
         annotationsThroughput.push({
           x: "QAOA Quantum",
           y: 0,
-          text: "QAOA: Execution Failed",
+          text: failText,
           showarrow: false,
           font: { color: "#ef4444", size: 10 },
           bgcolor: "rgba(239, 68, 68, 0.15)",
@@ -873,10 +934,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const textValues = [
         baseline?.runtime_ms !== undefined ? `${baseline.runtime_ms.toFixed(2)} ms` : "Not Run",
         responsive?.runtime_ms !== undefined ? `${responsive.runtime_ms.toFixed(2)} ms` : "Not Run",
-        qaoa?.status === "ok"
+        isQAOAValid
           ? `${qaoa.runtime_ms.toFixed(1)} ms`
           : qaoaFailed
-          ? "Failed/Timeout"
+          ? (qaoa?.solver_status === "timeout" ? `Timeout (${qaoa.runtime_ms ? qaoa.runtime_ms.toFixed(0) : "0"}ms)` : "Failed")
           : "Not Run",
       ];
 
@@ -1073,6 +1134,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // Refresh history
   if (btnRefreshHistory) {
     btnRefreshHistory.addEventListener("click", loadResultsHistory);
+  }
+
+  // Stale recalculate action
+  if (btnStaleRecalculate) {
+    btnStaleRecalculate.addEventListener("click", runAllSolversAndCompare);
   }
 
   // -------------------------------------------------------------------------
