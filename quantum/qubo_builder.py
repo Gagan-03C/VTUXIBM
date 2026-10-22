@@ -177,3 +177,22 @@ def _parse_key(key: str) -> Tuple[int, int]:
     stripped = key.strip("()")
     r, c = stripped.split(",")
     return int(r), int(c)
+
+
+# ---------------------------------------------------------------------------
+# 4-Variable Binary Timing QUBO Formulation
+# ---------------------------------------------------------------------------
+from quantum.binary_qubo import (  # noqa: E402
+    GRID_EDGES,
+    NUM_VARIABLES,
+    PLAN_0_TIMING,
+    PLAN_1_TIMING,
+    build_binary_qubo,
+    compute_intended_cost,
+    compute_intersection_delay,
+    compute_local_delay_terms,
+    evaluate_qubo_energy,
+    get_edge_coordination_weights,
+    verify_qubo_against_intended_cost,
+)
+
