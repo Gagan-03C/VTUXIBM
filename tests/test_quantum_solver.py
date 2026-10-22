@@ -301,7 +301,73 @@ class TestQuantumWorkflowAndGapAnalysis:
 
 
 # ---------------------------------------------------------------------------
-# 6. Architecture and File Ownership Constraints
+# 6. Multi-Scenario Benchmarking & Repeated Runs
+# ---------------------------------------------------------------------------
+class TestMultiScenarioAndRepeatedRuns:
+    """Verify timing constraints, gap comparison, and reproducibility across scenarios."""
+
+    @pytest.mark.parametrize("scenario_name, generator_fn", [
+        ("light", lambda sim: sim.generate_scenario("light", seed=10)),
+        ("medium", lambda sim: sim.generate_scenario("medium", seed=20)),
+        ("heavy", lambda sim: sim.generate_scenario("heavy", seed=30)),
+        ("ns_dominant", lambda sim: {iid: ApproachCounts(ns_count=45, ew_count=5) for iid in ("A", "B", "C", "D")}),
+        ("ew_dominant", lambda sim: {iid: ApproachCounts(ns_count=5, ew_count=45) for iid in ("A", "B", "C", "D")}),
+        ("checkerboard", lambda sim: {
+            "A": ApproachCounts(ns_count=40, ew_count=10),
+            "B": ApproachCounts(ns_count=10, ew_count=40),
+            "C": ApproachCounts(ns_count=40, ew_count=10),
+            "D": ApproachCounts(ns_count=10, ew_count=40),
+        }),
+        ("zero", lambda sim: {iid: ApproachCounts(ns_count=0, ew_count=0) for iid in ("A", "B", "C", "D")}),
+    ])
+    def test_scenarios_satisfy_timing_constraints_and_compare_to_classical(self, scenario_name, generator_fn):
+        sim = TrafficSimulator()
+        traffic_input = generator_fn(sim)
+
+        report = evaluate_quantum_workflow(
+            traffic_input=traffic_input,
+            coord_weight=0.0,
+            p_layers=1,
+            shots=1024,
+            maxiter=50,
+            seed=42,
+        )
+
+        assert report["status"] == "ok"
+        # Validate all timing constraints
+        validate_timing_plan(report["qaoa_result"]["timing_plan"], traffic_input)
+
+        # Gap comparison: QAOA should equal or closely approximate exact classical optimum
+        assert report["objective_gap"] is not None
+        assert report["objective_gap"] >= -1e-6  # QAOA can never be lower than exact classical global minimum
+        assert report["objective_gap"] == pytest.approx(0.0, abs=1e-3)
+        assert report["is_exact_optimum"] is True
+
+        # Runtimes must be honestly positive
+        assert report["qaoa_runtime_ms"] > 0.0
+        assert report["exhaustive_runtime_ms"] > 0.0
+
+    @pytest.mark.parametrize("seed", [42, 101, 2024, 7, 999])
+    def test_repeated_runs_stability(self, benchmark_traffic, seed):
+        sol = solve_traffic_qubo(
+            traffic_input=benchmark_traffic,
+            coord_weight=0.0,
+            p_layers=1,
+            shots=1024,
+            maxiter=50,
+            seed=seed,
+        )
+        assert sol["status"] == "ok"
+        assert sol["cost"] is not None
+        # Must strictly satisfy timing constraints
+        validate_timing_plan(sol["timing_plan"], benchmark_traffic)
+        # Should converge to global optimum bitstring 0010
+        assert sol["bitstring"] == "0010"
+        assert sol["cost"] == pytest.approx(2085.0, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# 7. Architecture and File Ownership Constraints
 # ---------------------------------------------------------------------------
 class TestQuantumSolverArchitecture:
     """Verify architectural boundaries and forbidden import checks."""
@@ -316,3 +382,4 @@ class TestQuantumSolverArchitecture:
         with open("quantum_solver.py", "r", encoding="utf-8") as f:
             content = f.read()
         assert "flask" not in content, "Root quantum_solver.py must NOT import flask"
+

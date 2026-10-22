@@ -194,8 +194,15 @@ def execute_qaoa(
     if initial_point is not None:
         init_pt = list(initial_point)
     elif seed is not None:
+        try:
+            op, _ = qp.to_ising()
+            has_cost_terms = any(p != "I" * op.num_qubits for p in op.paulis.to_labels())
+        except Exception:
+            has_cost_terms = True
+
         rng = np.random.default_rng(seed)
-        init_pt = rng.uniform(0.0, np.pi, size=2 * p_layers).tolist()
+        num_params = 2 * p_layers if has_cost_terms else p_layers
+        init_pt = rng.uniform(0.0, np.pi, size=num_params).tolist()
     else:
         init_pt = None
 
@@ -590,7 +597,10 @@ def evaluate_quantum_workflow(
         qaoa_served = qaoa_metrics["vehicles_served"]
         objective_gap = round(float(qaoa_cost) - ex_delay, 4)
         wait_gap_sec = round(qaoa_wait - ex_wait, 4)
-        is_exact_optimum = (qaoa_res.get("bitstring") == exhaustive_optimum["bitstring"])  # type: ignore
+        is_exact_optimum = (
+            qaoa_res.get("bitstring") == exhaustive_optimum["bitstring"]  # type: ignore
+            or abs(objective_gap) < 1e-4
+        )
     else:
         qaoa_delay = None
         qaoa_wait = None
