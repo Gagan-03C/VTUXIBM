@@ -6,17 +6,29 @@ Executes genuine Quantum Approximate Optimization Algorithm (QAOA) on local
 quantum simulator (Qiskit Aer) using installed, compatible Qiskit APIs.
 
 -----------------------------------------------------------------------------
-OVERVIEW & REPRODUCIBILITY GUARANTEE
+OVERVIEW & CONTRACT COMPLIANCE (docs/INTERFACES.md §2.4 & §4.5)
 -----------------------------------------------------------------------------
-This solver converts QuantumFlow's validated 4-variable binary traffic objective
-(or any QuadraticProgram) into an Ising Hamiltonian and executes genuine QAOA.
+Integrates directly with:
+  - metrics.traffic_model.evaluate (single source of truth for queue & delay)
+  - quantum.reference_enumerator (candidate timing plans & bit decoding)
+  - shared.validators (cycle and green-time constraints)
 
-NO FAKE/MOCK RESULTS:
+NO FABRICATED QUANTUM RESULTS:
 The measured bitstring, objective value, and probability distribution come
-directly from the quantum circuit execution on Qiskit Aer's Sampler primitive.
-Exhaustive search is NEVER substituted for QAOA results.
+directly from quantum circuit execution on Qiskit Aer's Sampler primitive.
+Exhaustive classical search is NEVER substituted or labeled as quantum.
 
-REPRODUCIBLE SETTINGS:
+FAILURE & TIMEOUT HANDLING:
+- Timeouts (> timeout_sec): status="timeout", cost=None, error_msg set.
+- Solver exceptions: status="error", cost=None, error_msg set.
+- Missing / zero measurement samples: status="infeasible", cost=None, error_msg set.
+- Invalid measurement bitstrings: status="infeasible", cost=None, error_msg set.
+In all failure modes, a valid equal-split fallback timing plan is attached so
+downstream consumers do not crash on schema validation, but status is never "ok".
+
+-----------------------------------------------------------------------------
+REPRODUCIBLE SETTINGS
+-----------------------------------------------------------------------------
 - Circuit depth (p_layers): 1 or 2 (default 1)
 - Classical optimizer: COBYLA with bounded iterations (default maxiter=50)
 - Quantum simulator: Qiskit Aer Sampler primitive
@@ -38,7 +50,7 @@ import numpy as np
 # Compatible Qiskit and Qiskit-Optimization imports
 from qiskit_aer.primitives import Sampler as AerSampler
 from qiskit_algorithms import QAOA
-from qiskit_algorithms.optimizers import COBYLA, SPSA
+from qiskit_algorithms.optimizers import COBYLA
 from qiskit_optimization import QuadraticProgram
 from qiskit_optimization.algorithms import MinimumEigenOptimizer
 
@@ -50,10 +62,18 @@ from quantum.binary_qubo import (
     compute_intended_cost,
     evaluate_qubo_energy,
 )
-from quantum.reference_enumerator import decode_bitstring
+from quantum.reference_enumerator import (
+    ALL_BITSTRINGS,
+    decode_bitstring,
+    find_optimal_plan,
+)
 from metrics.traffic_model import evaluate as evaluate_traffic
-from shared.types import SolverResult, TimingPlan, TrafficInput
-from shared.validators import validate_timing_plan, validate_traffic_input
+from shared.types import ApproachTiming, Metrics, SolverResult, TimingPlan, TrafficInput
+from shared.validators import (
+    CYCLE_SEC,
+    validate_timing_plan,
+    validate_traffic_input,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -67,22 +87,16 @@ class QAOAMeasurementSample(TypedDict):
     status: str
 
 
-class QuantumSolverResult(TypedDict):
-    """Complete result returned by the genuine QAOA quantum solver."""
-    bitstring: str
-    objective_value: float
-    status: str
-    runtime_ms: float
-    timing_plan: TimingPlan
-    solver_result: SolverResult
-    samples: List[QAOAMeasurementSample]
-    optimal_parameters: Optional[Dict[str, float]]
-    variable_names: List[str]
-    error_msg: Optional[str]
-    shots: int
-    p_layers: int
-    maxiter: int
-    seed: Optional[int]
+# ---------------------------------------------------------------------------
+# Fallback Plan Generator
+# ---------------------------------------------------------------------------
+def _make_fallback_plan(intersections: Sequence[str]) -> TimingPlan:
+    """Generate a deterministic equal-split 30/30 timing plan."""
+    half_cycle = CYCLE_SEC // 2
+    return {
+        iid: ApproachTiming(ns_green=half_cycle, ew_green=half_cycle)
+        for iid in intersections
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +156,7 @@ def execute_qaoa(
     maxiter: int = 50,
     seed: Optional[int] = 42,
     initial_point: Optional[Sequence[float]] = None,
+    timeout_sec: float = 30.0,
 ) -> Dict[str, Any]:
     """
     Execute genuine QAOA on a QuadraticProgram using local AerSampler and COBYLA.
@@ -153,10 +168,15 @@ def execute_qaoa(
         maxiter: Maximum classical parameter optimizer iterations.
         seed: Random seed for reproducible quantum simulation.
         initial_point: Optional initial variational parameters (length 2 * p_layers).
+        timeout_sec: Maximum wall-clock time in seconds before aborting.
 
     Returns:
         Dict with execution results: best_x, bitstring, fval, samples, runtime_ms,
         optimal_parameters, and raw Qiskit result.
+
+    Raises:
+        TimeoutError: if execution exceeds timeout_sec.
+        ValueError: if no valid measurement samples are returned.
     """
     t0 = time.perf_counter()
 
@@ -188,21 +208,29 @@ def execute_qaoa(
     )
     meo = MinimumEigenOptimizer(qaoa)
 
-    # 4. Execute QAOA circuit optimization
+    # 5. Execute QAOA circuit optimization
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         raw_result = meo.solve(qp)
 
-    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    elapsed_sec = time.perf_counter() - t0
+    elapsed_ms = elapsed_sec * 1000.0
 
-    # 5. Extract measured variable vector and bitstring
-    # Variable ordering in qp.variables is strictly preserved:
+    if elapsed_sec > timeout_sec:
+        raise TimeoutError(
+            f"QAOA execution exceeded {timeout_sec:.1f}s timeout ({elapsed_ms:.1f} ms)."
+        )
+
+    # 6. Extract measured variable vector and bitstring
     var_names = [v.name for v in qp.variables]
+    if raw_result.x is None or len(raw_result.x) == 0:
+        raise ValueError("QAOA optimizer returned empty solution vector.")
+
     best_x = [int(round(val)) for val in raw_result.x]
     bitstring = "".join(str(val) for val in best_x)
     fval = float(raw_result.fval)
 
-    # 6. Extract measurement distribution
+    # 7. Extract measurement distribution
     samples: List[QAOAMeasurementSample] = []
     if hasattr(raw_result, "samples") and raw_result.samples:
         for s in raw_result.samples:
@@ -213,11 +241,12 @@ def execute_qaoa(
                 "probability": float(s.probability),
                 "status": str(s.status),
             })
-        # Sort samples by probability descending, breaking ties by fval then bitstring
         samples.sort(key=lambda s: (-round(s["probability"], 5), s["fval"], s["bitstring"]))
 
+    if not samples:
+        raise ValueError("No measurement samples returned by quantum simulator.")
 
-    # 7. Extract optimal variational parameters (beta, gamma) if available
+    # 8. Extract optimal variational parameters (beta, gamma) if available
     optimal_params: Optional[Dict[str, float]] = None
     if hasattr(raw_result, "min_eigen_solver_result") and raw_result.min_eigen_solver_result:
         eigen_res = raw_result.min_eigen_solver_result
@@ -271,14 +300,13 @@ def run_small_example(
         seed=seed,
     )
 
-    # Verify convergence to known minimum
     is_optimal = res["fval"] == -1.0 and res["best_x"] in ([0, 1], [1, 0])
     res["is_optimal"] = is_optimal
     return res
 
 
 # ---------------------------------------------------------------------------
-# 2. QuantumFlow Traffic QUBO Solver
+# 2. QuantumFlow Traffic QUBO Solver (Shared SolverResult Schema)
 # ---------------------------------------------------------------------------
 def solve_traffic_qubo(
     traffic_input: TrafficInput,
@@ -287,19 +315,27 @@ def solve_traffic_qubo(
     shots: int = 1024,
     maxiter: int = 50,
     seed: Optional[int] = 42,
+    timeout_sec: float = 30.0,
     intersections: Optional[Sequence[str]] = None,
-) -> QuantumSolverResult:
+) -> SolverResult:
     """
     Solve QuantumFlow's 4-intersection signal timing optimization using genuine QAOA.
 
-    Steps:
-        1. Validate traffic input snapshot.
-        2. Build exact QUBO matrix Q and offset c for the 4 binary choices.
-        3. Convert to Qiskit QuadraticProgram preserving variable ordering:
-           x_0 = A (0,0), x_1 = B (0,1), x_2 = C (1,0), x_3 = D (1,1).
-        4. Execute genuine QAOA on Qiskit Aer local quantum simulator.
-        5. Extract best measured bitstring, objective value, and runtime.
-        6. Decode bitstring to TimingPlan and evaluate with shared traffic evaluator.
+    Conforms strictly to docs/INTERFACES.md §2.4 (SolverResult schema):
+        algorithm:    "qaoa"
+        timing_plan:  TimingPlan (passes validate_timing_plan)
+        cost:         float | None
+        metrics:      Metrics (from shared traffic model)
+        runtime_ms:   float
+        status:       "ok" | "timeout" | "infeasible" | "error"
+        error_msg:    str | None
+
+    Failure / Timeout Handling:
+        - On timeout (> timeout_sec): status="timeout", cost=None, error_msg set.
+        - On missing samples: status="infeasible", cost=None, error_msg set.
+        - On invalid bitstring: status="infeasible", cost=None, error_msg set.
+        - On solver exception: status="error", cost=None, error_msg set.
+        Never fabricates a successful quantum result on failure.
 
     Args:
         traffic_input: Queue counts for all 4 intersections.
@@ -308,36 +344,70 @@ def solve_traffic_qubo(
         shots: Measurement shots on AerSimulator (default 1024).
         maxiter: Maximum COBYLA optimizer iterations (default 50).
         seed: Random seed for reproducible quantum execution (default 42).
+        timeout_sec: Wall-clock timeout threshold in seconds (default 30.0).
         intersections: Ordered 4-intersection list (defaults to traffic_input keys).
 
     Returns:
-        QuantumSolverResult dict with bitstring, objective_value, status, runtime_ms,
-        timing_plan, solver_result, and measurement samples.
+        SolverResult dictionary matching the agreed team contract.
     """
-    validate_traffic_input(traffic_input)
+    t_start = time.perf_counter()
+
+    # Input validation
+    try:
+        validate_traffic_input(traffic_input)
+    except Exception as exc:
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan={},
+            cost=None,
+            metrics={
+                "total_vehicles": 0,
+                "vehicles_served": 0,
+                "remaining_queue": 0,
+                "avg_wait_sec": 0.0,
+                "total_delay_sec": 0.0,
+                "runtime_ms": 0.0,
+            },
+            runtime_ms=0.0,
+            status="error",
+            error_msg=f"Invalid traffic input: {exc}",
+        )
 
     inter_list = list(intersections) if intersections is not None else (
         list(GRID_INTERSECTIONS) if any(k.startswith("(") for k in traffic_input.keys())
         else list(DEFAULT_INTERSECTIONS)
     )
 
+    fallback_plan = _make_fallback_plan(inter_list)
+
     # 1. Build exact 4-variable QUBO
-    Q, offset, var_labels = build_binary_qubo(
-        traffic_input=traffic_input,
-        coord_weight=coord_weight,
-        intersections=inter_list,
-        symmetrize=False,
-    )
+    try:
+        Q, offset, var_labels = build_binary_qubo(
+            traffic_input=traffic_input,
+            coord_weight=coord_weight,
+            intersections=inter_list,
+            symmetrize=False,
+        )
+        qp = qubo_to_quadratic_program(
+            Q=Q,
+            offset=offset,
+            var_names=var_labels,
+            problem_name="quantumflow_traffic_4var",
+        )
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="error",
+            error_msg=f"QUBO formulation error: {exc}",
+        )
 
-    # 2. Convert to QuadraticProgram
-    qp = qubo_to_quadratic_program(
-        Q=Q,
-        offset=offset,
-        var_names=var_labels,
-        problem_name="quantumflow_traffic_4var",
-    )
-
-    # 3. Execute genuine QAOA
+    # 2. Execute genuine QAOA with error & timeout guards
     try:
         qaoa_output = execute_qaoa(
             qp=qp,
@@ -345,51 +415,96 @@ def solve_traffic_qubo(
             shots=shots,
             maxiter=maxiter,
             seed=seed,
+            timeout_sec=timeout_sec,
         )
-        status = "ok"
-        error_msg = None
-    except Exception as exc:  # pylint: disable=broad-except
-        return QuantumSolverResult(
-            bitstring="0000",
-            objective_value=float("inf"),
-            status="error",
-            runtime_ms=0.0,
-            timing_plan={},
-            solver_result=SolverResult(
-                algorithm="qaoa",
-                timing_plan={},
-                cost=None,
-                metrics={
-                    "total_vehicles": 0,
-                    "vehicles_served": 0,
-                    "remaining_queue": 0,
-                    "avg_wait_sec": 0.0,
-                    "total_delay_sec": 0.0,
-                    "runtime_ms": 0.0,
-                },
-                runtime_ms=0.0,
-                status="error",
-                error_msg=str(exc),
-            ),
-            samples=[],
-            optimal_parameters=None,
-            variable_names=var_labels,
+    except TimeoutError as exc:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="timeout",
             error_msg=str(exc),
-            shots=shots,
-            p_layers=p_layers,
-            maxiter=maxiter,
-            seed=seed,
+        )
+    except ValueError as exc:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="infeasible",
+            error_msg=str(exc),
+        )
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="error",
+            error_msg=f"QAOA solver error: {exc}",
+        )
+
+    # 3. Check for empty samples or missing measurement outcomes
+    samples = qaoa_output.get("samples", [])
+    if not samples:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="infeasible",
+            error_msg="Missing measurement outcomes: AerSampler returned 0 measurement samples.",
         )
 
     bitstring = qaoa_output["bitstring"]
     runtime_ms = qaoa_output["runtime_ms"]
     objective_val = qaoa_output["fval"]
 
-    # 4. Decode measured bitstring to TimingPlan
-    timing_plan = decode_bitstring(bitstring, inter_list)
-    validate_timing_plan(timing_plan, traffic_input)
+    # 4. Decode measured bitstring
 
-    # 5. Evaluate against shared traffic model evaluator
+    if len(bitstring) != NUM_VARIABLES or any(b not in ("0", "1") for b in bitstring):
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="infeasible",
+            error_msg=f"Invalid measurement bitstring '{bitstring}'. Expected {NUM_VARIABLES} binary bits.",
+        )
+
+    try:
+        timing_plan = decode_bitstring(bitstring, inter_list)
+        validate_timing_plan(timing_plan, traffic_input)
+    except Exception as exc:
+        elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+        fb_metrics = evaluate_traffic(traffic_input, fallback_plan, algorithm="qaoa", runtime_ms=elapsed_ms)["metrics"]
+        return SolverResult(
+            algorithm="qaoa",
+            timing_plan=fallback_plan,
+            cost=None,
+            metrics=fb_metrics,
+            runtime_ms=round(elapsed_ms, 1),
+            status="infeasible",
+            error_msg=f"Failed to decode valid plan from bitstring '{bitstring}': {exc}",
+        )
+
+    # 4. Evaluate against shared traffic model evaluator
     solver_res = evaluate_traffic(
         traffic_input=traffic_input,
         timing_plan=timing_plan,
@@ -398,105 +513,175 @@ def solve_traffic_qubo(
         cost=objective_val,
     )
 
-    return QuantumSolverResult(
-        bitstring=bitstring,
-        objective_value=objective_val,
-        status=status,
-        runtime_ms=runtime_ms,
+    # Construct agreed SolverResult schema with attached quantum metadata
+    res = SolverResult(
+        algorithm="qaoa",
         timing_plan=timing_plan,
-        solver_result=solver_res,
-        samples=qaoa_output["samples"],
-        optimal_parameters=qaoa_output["optimal_parameters"],
-        variable_names=var_labels,
-        error_msg=error_msg,
-        shots=shots,
+        cost=round(objective_val, 4),
+        metrics=solver_res["metrics"],
+        runtime_ms=round(runtime_ms, 1),
+        status="ok",
+        error_msg=None,
+    )
+    # Extra quantum diagnostics for callers wanting deep inspection:
+    res["bitstring"] = bitstring  # type: ignore
+    res["samples"] = qaoa_output["samples"]  # type: ignore
+    res["optimal_parameters"] = qaoa_output["optimal_parameters"]  # type: ignore
+    res["variable_names"] = var_labels  # type: ignore
+
+    return res
+
+
+# Backward-compatible alias conforming to docs/INTERFACES.md §4.5
+run_qaoa = solve_traffic_qubo
+
+
+# ---------------------------------------------------------------------------
+# 3. Full Quantum Workflow Benchmark & Gap Analysis
+# ---------------------------------------------------------------------------
+def evaluate_quantum_workflow(
+    traffic_input: TrafficInput,
+    coord_weight: float = 0.0,
+    p_layers: int = 1,
+    shots: int = 1024,
+    maxiter: int = 50,
+    seed: Optional[int] = 42,
+    timeout_sec: float = 30.0,
+) -> Dict[str, Any]:
+    """
+    Test and benchmark the full quantum workflow:
+    QUBO formulation -> QAOA circuit execution -> Bitstring decoding -> Traffic evaluation.
+
+    Reports:
+        - QAOA observed result (bitstring, objective value, delay, average wait)
+        - Exact classical exhaustive optimum from reference enumerator
+        - Objective gap (QAOA cost - Exhaustive optimal cost)
+        - Wait time gap and vehicles served comparison
+        - Quantum and classical runtimes
+    """
+    validate_traffic_input(traffic_input)
+
+    # 1. Run genuine QAOA solver
+    qaoa_res = solve_traffic_qubo(
+        traffic_input=traffic_input,
+        coord_weight=coord_weight,
         p_layers=p_layers,
+        shots=shots,
         maxiter=maxiter,
         seed=seed,
+        timeout_sec=timeout_sec,
     )
 
+    # 2. Run reference enumerator to find exact discrete ground truth
+    t_ex_0 = time.perf_counter()
+    exhaustive_optimum = find_optimal_plan(traffic_input, objective="total_delay_sec")
+    exhaustive_runtime_ms = (time.perf_counter() - t_ex_0) * 1000.0
+
+    # 3. Calculate objective gap
+    qaoa_cost = qaoa_res["cost"]
+    qaoa_metrics = qaoa_res["metrics"]
+    ex_delay = exhaustive_optimum["total_delay_sec"]
+    ex_wait = exhaustive_optimum["avg_wait_sec"]
+    ex_served = exhaustive_optimum["vehicles_served"]
+
+    if qaoa_cost is not None and qaoa_res["status"] == "ok":
+        qaoa_delay = qaoa_metrics["total_delay_sec"]
+        qaoa_wait = qaoa_metrics["avg_wait_sec"]
+        qaoa_served = qaoa_metrics["vehicles_served"]
+        objective_gap = round(float(qaoa_cost) - ex_delay, 4)
+        wait_gap_sec = round(qaoa_wait - ex_wait, 4)
+        is_exact_optimum = (qaoa_res.get("bitstring") == exhaustive_optimum["bitstring"])  # type: ignore
+    else:
+        qaoa_delay = None
+        qaoa_wait = None
+        qaoa_served = None
+        objective_gap = None
+        wait_gap_sec = None
+        is_exact_optimum = False
+
+    return {
+        "status": qaoa_res["status"],
+        "qaoa_result": qaoa_res,
+        "qaoa_bitstring": qaoa_res.get("bitstring"),
+        "qaoa_cost": qaoa_cost,
+        "qaoa_total_delay_sec": qaoa_delay,
+        "qaoa_avg_wait_sec": qaoa_wait,
+        "qaoa_vehicles_served": qaoa_served,
+        "qaoa_runtime_ms": qaoa_res["runtime_ms"],
+        "exhaustive_optimum": exhaustive_optimum,
+        "exhaustive_bitstring": exhaustive_optimum["bitstring"],
+        "exhaustive_total_delay_sec": ex_delay,
+        "exhaustive_avg_wait_sec": ex_wait,
+        "exhaustive_vehicles_served": ex_served,
+        "exhaustive_runtime_ms": round(exhaustive_runtime_ms, 1),
+        "objective_gap": objective_gap,
+        "wait_gap_sec": wait_gap_sec,
+        "is_exact_optimum": is_exact_optimum,
+    }
+
 
 # ---------------------------------------------------------------------------
-# CLI Execution & Standalone Demonstration
+# CLI Execution
 # ---------------------------------------------------------------------------
 def main() -> None:
-    """Run known small optimization example and then the traffic QUBO."""
-    print("=" * 70)
-    print("  QUANTUMFLOW — GENUINE QAOA QUANTUM SOLVER")
-    print("  Local Quantum Simulator (Qiskit Aer) & Classical Optimizer (COBYLA)")
-    print("=" * 70)
+    """Run full quantum workflow benchmark and report objective gap."""
+    print("=" * 72)
+    print("  QUANTUMFLOW — GENUINE QAOA QUANTUM SOLVER WORKFLOW")
+    print("  Local Quantum Simulator (Qiskit Aer) & Shared Traffic Model")
+    print("=" * 72)
 
-    # -----------------------------------------------------------------------
-    # Step 1: Run Known Small Optimization Example
-    # -----------------------------------------------------------------------
-    print("\n[STEP 1] Running Known Small Optimization Example (2 Qubits)...")
-    print("  Objective: minimize f(x0, x1) = -x0 - x1 + 2*x0*x1")
-    print("  Analytical minimum: f = -1.0 at [0, 1] or [1, 0]")
-    print("  Reproducible settings: p_layers=1, shots=1024, maxiter=50, seed=42")
-
+    # Step 1: Known Small Optimization Problem
+    print("\n[STEP 1] Known 2-Qubit Analytical Example...")
     small_res = run_small_example(p_layers=1, shots=1024, maxiter=50, seed=42)
-
-    print(f"  > Measured Bitstring:    '{small_res['bitstring']}' (x={small_res['best_x']})")
-    print(f"  > Objective Value:       {small_res['fval']:.4f}")
+    print(f"  > Measured Bitstring:    '{small_res['bitstring']}'")
+    print(f"  > Objective Value:       {small_res['fval']:.4f} (analytical: -1.0000)")
     print(f"  > Optimal Ground State:  {'YES (SUCCESS)' if small_res['is_optimal'] else 'NO'}")
-    print(f"  > Quantum Runtime:       {small_res['runtime_ms']:.1f} ms")
-    print("  > Measurement Distribution:")
-    for s in small_res["samples"]:
-        print(f"      |{s['bitstring']}> : prob = {s['probability']:.4f}  (fval = {s['fval']:.1f})")
+    print(f"  > Runtime:               {small_res['runtime_ms']:.1f} ms")
 
-    # -----------------------------------------------------------------------
-    # Step 2: Run 4-Variable Traffic QUBO
-    # -----------------------------------------------------------------------
-    print("\n" + "-" * 70)
-    print("[STEP 2] Running 4-Variable Traffic QUBO on Benchmark Snapshot...")
+    # Step 2: Full Quantum Workflow Benchmark on Traffic QUBO
+    print("\n" + "-" * 72)
+    print("[STEP 2] Full Quantum Traffic Workflow Benchmark...")
     from simulator.traffic_simulator import TrafficSimulator
     traffic = TrafficSimulator().get_traffic_input(as_grid=False)
 
-    print("  Traffic Demand per Intersection:")
-    for iid, counts in traffic.items():
-        print(f"    Intersection {iid}: NS = {counts['ns_count']} veh, EW = {counts['ew_count']} veh")
-
-    print("\n  Executing Genuine QAOA:")
-    print("    Variables:           4 binary choices (x_A, x_B, x_C, x_D)")
-    print("    Layers (p):          1")
-    print("    Shots:               1024")
-    print("    Optimizer:           COBYLA (maxiter=50)")
-    print("    Quantum Simulator:   Qiskit Aer Sampler")
-    print("    Seed:                42")
-
-    traffic_res = solve_traffic_qubo(
+    report = evaluate_quantum_workflow(
         traffic_input=traffic,
-        coord_weight=5.0,
+        coord_weight=0.0,
         p_layers=1,
         shots=1024,
         maxiter=50,
         seed=42,
     )
 
-    print(f"\n  > Best Measured Bitstring: '{traffic_res['bitstring']}'")
-    print(f"  > Objective Value:         {traffic_res['objective_value']:.2f}")
-    print(f"  > Execution Status:        {traffic_res['status']}")
-    print(f"  > Wall-clock Runtime:      {traffic_res['runtime_ms']:.1f} ms")
+    print("\n  [QAOA Quantum Solver Result]:")
+    print(f"    Status:                  {report['status']}")
+    print(f"    Measured Bitstring:      '{report['qaoa_bitstring']}'")
+    print(f"    Reported Cost:           {report['qaoa_cost']:.2f}")
+    print(f"    Modeled Delay:           {report['qaoa_total_delay_sec']:.1f} s")
+    print(f"    Average Wait:            {report['qaoa_avg_wait_sec']:.2f} s")
+    print(f"    Vehicles Served:         {report['qaoa_vehicles_served']}")
+    print(f"    Quantum Runtime:         {report['qaoa_runtime_ms']:.1f} ms")
 
-    m = traffic_res["solver_result"]["metrics"]
-    print("\n  > Evaluated Traffic Metrics (Shared Evaluator):")
-    print(f"      Total Vehicles:    {m['total_vehicles']}")
-    print(f"      Vehicles Served:   {m['vehicles_served']}")
-    print(f"      Remaining Queue:   {m['remaining_queue']}")
-    print(f"      Average Wait:      {m['avg_wait_sec']} s")
-    print(f"      Total Delay:       {m['total_delay_sec']} s")
+    print("\n  [Exhaustive Classical Search Reference (Ground Truth)]: ")
+    print(f"    Optimal Bitstring:       '{report['exhaustive_bitstring']}'")
+    print(f"    Optimal Delay:           {report['exhaustive_total_delay_sec']:.1f} s")
+    print(f"    Optimal Wait:            {report['exhaustive_avg_wait_sec']:.2f} s")
+    print(f"    Vehicles Served:         {report['exhaustive_vehicles_served']}")
+    print(f"    Exhaustive Runtime:      {report['exhaustive_runtime_ms']:.1f} ms")
 
-    print("\n  > Resulting Signal Timing Plan:")
-    for iid, timing in traffic_res["timing_plan"].items():
-        print(f"      Intersection {iid}: NS Green = {timing['ns_green']}s, EW Green = {timing['ew_green']}s")
+    print("\n  [Quantum vs. Classical Gap Analysis]:")
+    print(f"    Exact Optimum Found:     {'YES (SUCCESS)' if report['is_exact_optimum'] else 'NO'}")
+    print(f"    Objective Gap:           {report['objective_gap']:.4f} s (E_qaoa - E_exact)")
+    print(f"    Wait Time Gap:           {report['wait_gap_sec']:.4f} s")
 
-    print("\n  > Top Measured Quantum States:")
-    for i, s in enumerate(traffic_res["samples"][:5]):
-        print(f"      #{i+1}: |{s['bitstring']}>  prob={s['probability']:.4f}  fval={s['fval']:.1f}")
+    qaoa_res = report["qaoa_result"]
+    print("\n  [Decoded Timing Plan Passed to Shared Interface]:")
+    for iid, timing in qaoa_res["timing_plan"].items():
+        print(f"    Intersection {iid}: NS Green = {timing['ns_green']}s, EW Green = {timing['ew_green']}s")
 
-    print("\n" + "=" * 70)
-    print("  QAOA Execution Completed Successfully. No classical override used.")
-    print("=" * 70)
+    print("\n" + "=" * 72)
+    print("  Full Quantum Workflow Execution Complete. Authentic Quantum Results.")
+    print("=" * 72)
 
 
 if __name__ == "__main__":

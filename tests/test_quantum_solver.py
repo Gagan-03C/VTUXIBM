@@ -6,27 +6,31 @@ Validates:
   1. Execution of genuine QAOA on small known optimization example with analytical minimum.
   2. Conversion of 4-variable traffic QUBO into Qiskit QuadraticProgram.
   3. Execution of genuine QAOA on 4-variable traffic QUBO using local Aer simulator.
-  4. Preservation of variable ordering (x_A, x_B, x_C, x_D).
-  5. Decoded timing plan satisfies cycle (60 s) and green duration (15–45 s) constraints.
-  6. Reproducibility using seed settings.
+  4. Compliance with agreed SolverResult schema (algorithm, timing_plan, cost, metrics, runtime_ms, status, error_msg).
+  5. Robust failure handling (timeouts, missing outcomes, invalid bitstrings, solver exceptions)
+     without fabricating successful quantum results.
+  6. Full quantum workflow benchmark and objective gap against exhaustive classical search.
   7. Architectural constraints (no Flask imports).
 """
 
 from __future__ import annotations
 
 import sys
+from unittest.mock import patch
 import numpy as np
 import pytest
 
 from quantum.binary_qubo import build_binary_qubo
 from quantum.quantum_solver import (
-    QuantumSolverResult,
+    QAOAMeasurementSample,
+    evaluate_quantum_workflow,
     execute_qaoa,
     qubo_to_quadratic_program,
+    run_qaoa,
     run_small_example,
     solve_traffic_qubo,
 )
-from shared.types import ApproachCounts, TrafficInput
+from shared.types import ApproachCounts, SolverResult, TrafficInput
 from shared.validators import validate_timing_plan, validate_traffic_input
 from simulator.traffic_simulator import TrafficSimulator
 
@@ -120,32 +124,32 @@ class TestQUBOToQuadraticProgram:
 
 
 # ---------------------------------------------------------------------------
-# 3. Traffic QUBO QAOA Execution Tests
+# 3. SolverResult Schema & Full Traffic QAOA Execution
 # ---------------------------------------------------------------------------
 class TestSolveTrafficQUBO:
-    """Verify genuine QAOA execution on the 4-variable traffic problem."""
+    """Verify genuine QAOA execution and SolverResult schema compliance."""
 
-    def test_solve_traffic_qubo_success(self, benchmark_traffic):
+    def test_solver_result_schema_compliance(self, benchmark_traffic):
         res = solve_traffic_qubo(
             traffic_input=benchmark_traffic,
-            coord_weight=5.0,
+            coord_weight=0.0,
             p_layers=1,
             shots=512,
             maxiter=30,
             seed=42,
         )
 
+        # 1. Exact top-level SolverResult keys per docs/INTERFACES.md §2.4
+        for expected_key in ("algorithm", "timing_plan", "cost", "metrics", "runtime_ms", "status", "error_msg"):
+            assert expected_key in res, f"Missing required SolverResult key: {expected_key}"
+
+        assert res["algorithm"] == "qaoa"
         assert res["status"] == "ok"
         assert res["error_msg"] is None
-        assert len(res["bitstring"]) == 4
-        assert set(res["bitstring"]).issubset({"0", "1"})
+        assert isinstance(res["cost"], float)
         assert res["runtime_ms"] > 0.0
-        assert isinstance(res["objective_value"], float)
 
-        # Variable names must preserve order
-        assert res["variable_names"] == ["x_A", "x_B", "x_C", "x_D"]
-
-        # Timing plan must strictly validate
+        # 2. Timing plan validation
         validate_timing_plan(res["timing_plan"], benchmark_traffic)
         for iid in ("A", "B", "C", "D"):
             assert iid in res["timing_plan"]
@@ -154,12 +158,19 @@ class TestSolveTrafficQUBO:
             assert 15 <= timing["ns_green"] <= 45
             assert 15 <= timing["ew_green"] <= 45
 
-        # Solver result metrics
-        m = res["solver_result"]["metrics"]
+        # 3. Metrics compliance with shared traffic model
+        m = res["metrics"]
         assert m["total_vehicles"] == 197
         assert 0 <= m["vehicles_served"] <= 197
         assert m["remaining_queue"] == 197 - m["vehicles_served"]
         assert m["avg_wait_sec"] >= 0.0
+        assert m["total_delay_sec"] >= 0.0
+        assert m["runtime_ms"] == res["runtime_ms"]
+
+        # 4. Quantum diagnostics attached
+        assert "bitstring" in res
+        assert len(res["bitstring"]) == 4
+        assert res["variable_names"] == ["x_A", "x_B", "x_C", "x_D"]
 
     def test_solve_traffic_qubo_with_grid_input(self, grid_traffic):
         res = solve_traffic_qubo(
@@ -187,13 +198,110 @@ class TestSolveTrafficQUBO:
         assert len(res["bitstring"]) == 4
         validate_timing_plan(res["timing_plan"], benchmark_traffic)
 
-    def test_invalid_traffic_input_raises_error(self):
-        with pytest.raises(ValueError):
-            solve_traffic_qubo({})
+
+# ---------------------------------------------------------------------------
+# 4. Error, Timeout, and Failure Handling (Never Fabricating Results)
+# ---------------------------------------------------------------------------
+class TestFailureHandlingWithoutFabrication:
+    """Verify that timeouts, missing outcomes, and exceptions do NOT fabricate 'ok' status."""
+
+    def test_timeout_returns_timeout_status_and_no_cost(self, benchmark_traffic):
+        # Set timeout_sec to 0.0001s to force timeout
+        res = solve_traffic_qubo(
+            traffic_input=benchmark_traffic,
+            timeout_sec=0.0001,
+        )
+        assert res["status"] == "timeout"
+        assert res["cost"] is None  # Never fabricate quantum cost on timeout
+        assert res["error_msg"] is not None
+        assert "timeout" in res["error_msg"].lower()
+        # Fallback plan is present and valid
+        validate_timing_plan(res["timing_plan"], benchmark_traffic)
+
+    def test_solver_exception_returns_error_status_and_no_cost(self, benchmark_traffic):
+        # Force exception by patching execute_qaoa
+        with patch("quantum.quantum_solver.execute_qaoa", side_effect=RuntimeError("Simulated quantum crash")):
+            res = solve_traffic_qubo(benchmark_traffic)
+            assert res["status"] == "error"
+            assert res["cost"] is None
+            assert res["error_msg"] is not None
+            assert "Simulated quantum crash" in res["error_msg"]
+            validate_timing_plan(res["timing_plan"], benchmark_traffic)
+
+    def test_missing_samples_returns_infeasible_status(self, benchmark_traffic):
+        # Mock empty samples
+        empty_output = {
+            "best_x": [0, 0, 0, 0],
+            "bitstring": "0000",
+            "fval": 0.0,
+            "samples": [],
+            "runtime_ms": 10.0,
+            "optimal_parameters": None,
+            "var_names": ["x_A", "x_B", "x_C", "x_D"],
+        }
+        with patch("quantum.quantum_solver.execute_qaoa", return_value=empty_output):
+            res = solve_traffic_qubo(benchmark_traffic)
+            assert res["status"] == "infeasible"
+            assert res["cost"] is None
+            assert "Missing measurement outcomes" in res["error_msg"]
+
+    def test_invalid_bitstring_returns_infeasible_status(self, benchmark_traffic):
+        bad_output = {
+            "best_x": [0, 0],
+            "bitstring": "00",  # Only 2 bits instead of 4
+            "fval": 100.0,
+            "samples": [{"bitstring": "00", "fval": 100.0, "probability": 1.0, "status": "SUCCESS"}],
+            "runtime_ms": 10.0,
+            "optimal_parameters": None,
+            "var_names": ["x_A", "x_B", "x_C", "x_D"],
+        }
+        with patch("quantum.quantum_solver.execute_qaoa", return_value=bad_output):
+            res = solve_traffic_qubo(benchmark_traffic)
+            assert res["status"] == "infeasible"
+            assert res["cost"] is None
+            assert "Invalid measurement bitstring" in res["error_msg"]
+
+    def test_invalid_traffic_input_returns_error(self):
+        res = solve_traffic_qubo({})
+        assert res["status"] == "error"
+        assert res["cost"] is None
+        assert "Invalid traffic input" in res["error_msg"]
 
 
 # ---------------------------------------------------------------------------
-# 4. Architecture and File Ownership Constraints
+# 5. Full Quantum Workflow & Gap Analysis Tests
+# ---------------------------------------------------------------------------
+class TestQuantumWorkflowAndGapAnalysis:
+    """Verify complete workflow and gap comparison against classical search."""
+
+    def test_evaluate_quantum_workflow_finds_optimum_on_benchmark(self, benchmark_traffic):
+        report = evaluate_quantum_workflow(
+            traffic_input=benchmark_traffic,
+            coord_weight=0.0,
+            p_layers=1,
+            shots=1024,
+            maxiter=50,
+            seed=42,
+        )
+
+        assert report["status"] == "ok"
+        assert report["qaoa_bitstring"] == "0010"
+        assert report["exhaustive_bitstring"] == "0010"
+        assert report["is_exact_optimum"] is True
+
+        # Objective gap: E_qaoa - E_exact == 0.0
+        assert report["objective_gap"] == 0.0
+        assert report["wait_gap_sec"] == 0.0
+        assert report["qaoa_total_delay_sec"] == 2085.0
+        assert report["exhaustive_total_delay_sec"] == 2085.0
+        assert report["qaoa_avg_wait_sec"] == 10.58
+        assert report["qaoa_vehicles_served"] == 116
+        assert report["qaoa_runtime_ms"] > 0.0
+        assert report["exhaustive_runtime_ms"] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 6. Architecture and File Ownership Constraints
 # ---------------------------------------------------------------------------
 class TestQuantumSolverArchitecture:
     """Verify architectural boundaries and forbidden import checks."""
