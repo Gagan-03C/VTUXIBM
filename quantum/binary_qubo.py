@@ -124,7 +124,7 @@ import numpy as np
 
 from shared.types import ApproachTiming, TimingPlan, TrafficInput
 from shared.validators import validate_traffic_input
-from metrics.traffic_model import evaluate as evaluate_traffic, served_and_remaining
+from metrics.traffic_model import served_and_remaining
 
 # ---------------------------------------------------------------------------
 # Topology Constants

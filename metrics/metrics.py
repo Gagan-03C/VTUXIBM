@@ -34,7 +34,6 @@ from metrics.traffic_model import (
     served_and_remaining,
     service_capacity,
 )
-from quantum.quantum_solver import solve_traffic_qubo
 from shared.types import Metrics, SolverResult, TimingPlan, TrafficInput
 from shared.validators import (
     CYCLE_SEC,
@@ -252,6 +251,8 @@ def evaluate_qaoa(
     If QAOA times out, fails, or produces an error, returns the actual status
     (e.g. status='timeout' or 'error') with cost=None. Never substitutes classical results.
     """
+    from quantum.quantum_solver import solve_traffic_qubo
+
     return solve_traffic_qubo(
         traffic_input=traffic_input,
         coord_weight=coord_weight,

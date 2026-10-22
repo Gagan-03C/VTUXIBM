@@ -16,7 +16,7 @@ This document formally freezes the **QuantumFlow Genuine QAOA Quantum Solver** i
 3. **Strict Contract Compliance:** Return types strictly conform to `SolverResult` and `Metrics` defined in `docs/INTERFACES.md` §2.4 and §4.5.
 4. **Honest Gap & Runtime Reporting:** Across all 8 standard traffic scenarios, QAOA consistently identifies the exact classical global optimum (objective gap $\Delta E = 0.0\text{ s}$). We explicitly report that **no quantum speedup exists** for $N=4$ variables ($2^4=16$ states): classical enumeration runs in $<1\text{ ms}$, while QAOA simulation requires $\sim 200\text{–}300\text{ ms}$ due to quantum circuit simulation overhead.
 5. **No-Fabrication Failure Guards:** Simulated crashes, timeouts ($>30\text{ s}$), empty measurement distributions, and malformed samples return `status="error"`, `"timeout"`, or `"infeasible"` with `cost=None` and an equal-split fallback plan ($30\text{ s} / 30\text{ s}$ green times). A successful quantum result is never fabricated.
-6. **100% Test Suite Verification:** All 368 unit, integration, and architecture tests in the repository pass.
+6. **100% Test Suite Verification:** All 428 unit, integration, API, and architecture tests in the repository pass with zero errors.
 
 ---
 
