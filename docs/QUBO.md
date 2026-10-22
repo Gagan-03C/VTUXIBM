@@ -259,3 +259,64 @@ report = verify_qubo_against_intended_cost(traffic_input, coord_weight=5.0)
 assert report["all_passed"] is True
 assert report["max_discrepancy"] < 1e-9
 ```
+
+---
+
+## 9. QAOA Quantum Solver Execution & Reproducible Settings
+
+QuantumFlow includes a genuine QAOA quantum solver in [`quantum/quantum_solver.py`](../quantum/quantum_solver.py) (CLI entry point: `quantum_solver.py`).
+
+### 9.1 Reproducible Settings
+
+| Setting | Default Value | Description |
+|---|---|---|
+| `p_layers` | `1` | Depth of the QAOA variational circuit ansatz |
+| `shots` | `1024` | Measurement shots executed on AerSimulator |
+| `optimizer` | `COBYLA(maxiter=50)` | Classical parameter optimizer with bounded iterations |
+| `simulator` | `qiskit_aer.primitives.Sampler` | Local quantum simulator primitive |
+| `seed` | `42` | Pseudorandom seed controlling simulator state and initial variational parameters |
+
+### 9.2 Execution Commands
+
+To execute genuine QAOA (running both the 2-qubit known test and 4-qubit traffic optimization):
+
+```bash
+# Activate virtual environment
+.venv\Scripts\activate
+
+# Run genuine QAOA solver CLI
+python quantum_solver.py
+
+# Run all quantum test suites
+pytest tests/test_quantum_solver.py -v
+pytest tests/test_qubo_formulation.py -v
+pytest tests/test_qaoa.py -v
+```
+
+### 9.3 Python Solver API
+
+```python
+from quantum.quantum_solver import run_small_example, solve_traffic_qubo
+from simulator.traffic_simulator import TrafficSimulator
+
+# 1. Run known 2-qubit test example
+small_res = run_small_example(p_layers=1, shots=1024, maxiter=50, seed=42)
+print("Small problem optimal:", small_res["is_optimal"])
+
+# 2. Run genuine QAOA on 4-variable traffic QUBO
+traffic = TrafficSimulator().get_traffic_input()
+res = solve_traffic_qubo(
+    traffic_input=traffic,
+    coord_weight=5.0,
+    p_layers=1,
+    shots=1024,
+    maxiter=50,
+    seed=42,
+)
+
+print("Best measured bitstring:", res["bitstring"])
+print("Objective value:", res["objective_value"])
+print("Runtime:", res["runtime_ms"], "ms")
+print("Vehicles served:", res["solver_result"]["metrics"]["vehicles_served"])
+```
+
